@@ -1,0 +1,136 @@
+# =============================================================================
+# AI Financial Document Analyst — Local development orchestration
+# -----------------------------------------------------------------------------
+# Services: postgres (pgvector) · redis · backend (FastAPI) · worker (Celery) · frontend
+# Usage:    docker compose up --build
+# Docs:     docs/08_INFRASTRUCTURE_SETUP.md
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 with the pgvector extension (image ships the extension).
+  # The init script enables `vector`; tables are owned by Alembic, NOT by init.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: fda_postgres
+    environment:
+      POSTGRES_USER: analyst
+      POSTGRES_PASSWORD: analyst
+      POSTGRES_DB: financial_analyst
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyst -d financial_analyst"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - fda_net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — Celery broker (db 1), result backend (db 2), future cache (db 0).
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: fda_redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - fda_net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend (API layer only — no business logic yet).
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fda_backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fda_net
+
+  # ---------------------------------------------------------------------------
+  # Celery worker — shares the backend image. No registered tasks yet (Phase 1+).
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fda_worker
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO -Q default,ingestion,extraction
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/data/uploads
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - fda_net
+
+  # ---------------------------------------------------------------------------
+  # React + Vite frontend (dev server).
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fda_frontend
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - fda_net
+
+# ---------------------------------------------------------------------------
+# Named volumes keep DB/Redis/upload data across container restarts.
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+
+# ---------------------------------------------------------------------------
+# Single user-defined bridge network: services reach each other by name
+# (e.g. `postgres`, `redis`) — which is why DATABASE_URL/REDIS_URL use those hosts.
+# ---------------------------------------------------------------------------
+networks:
+  fda_net:
+    driver: bridge

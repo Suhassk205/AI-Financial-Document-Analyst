@@ -1,0 +1,42 @@
+# ----------------------------------------------------------------------------
+# Runtime dependencies — Phase 0.5 foundation.
+# Pins are loose (compatible-release) at this stage; lock before production.
+# Business-logic libraries (langgraph, google-genai, pdf parsers, rerankers)
+# are listed but COMMENTED until the phase that introduces them, to keep the
+# foundation image lean and avoid implying unimplemented features.
+# ----------------------------------------------------------------------------
+
+# --- Web framework / ASGI ---
+fastapi~=0.115
+uvicorn[standard]~=0.32
+python-multipart~=0.0.12        # multipart uploads (wired in Phase 1)
+
+# --- Configuration / validation ---
+pydantic~=2.9
+pydantic-settings~=2.6
+
+# --- Database (PostgreSQL + pgvector) ---
+sqlalchemy[asyncio]~=2.0
+asyncpg~=0.30                    # async driver (app runtime)
+psycopg[binary]~=3.2            # sync driver (Alembic migrations)
+alembic~=1.13
+pgvector~=0.3                   # SQLAlchemy type for the vector column (used Phase 2)
+
+# --- Async task queue ---
+celery~=5.4
+redis~=5.2
+
+# --- Logging / observability ---
+structlog~=24.4
+
+# --- Security (scaffolded; auth implemented in Phase 11) ---
+passlib[bcrypt]~=1.7
+python-jose[cryptography]~=3.3
+
+# --- Deferred until their phase (kept here as a manifest, intentionally off) ---
+# langgraph~=0.2               # Phase 7 — multi-agent orchestration
+# langchain-core~=0.3          # Phase 7
+# google-genai~=0.3            # Phase 2/3 — Gemini LLM + embeddings
+# httpx~=0.27                  # OpenRouter fallback client (Phase 3)
+# FlagEmbedding                # Phase 6 — BAAI/bge-reranker-base
+# pypdf / pdfplumber / unstructured  # Phase 1 — document parsing

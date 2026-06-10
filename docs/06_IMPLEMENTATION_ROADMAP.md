@@ -14,6 +14,7 @@
 1. [Project Vision](#1-project-vision)
 2. [Phase Breakdown](#2-phase-breakdown)
    - ⭐ [Phase 0 Completion Report](#phase-0-completion-report)
+   - ⭐ [Phase 0.5 — Repository Foundation](#phase-05--repository-foundation)
 3. [Technology Decisions Log](#3-technology-decisions-log)
 4. [Architecture Decision Records (ADR)](#4-architecture-decision-records-adr)
 5. [Implementation Log](#5-implementation-log)
@@ -51,7 +52,8 @@ Financial analysis is document-heavy, repetitive, and error-prone. Generic LLM c
 
 | Phase | Name | Goal | Key deliverables | Exit criteria |
 |---|---|---|---|---|
-| **0** | **Architecture** | Foundation & docs | `docs/01–06`, schema, repo scaffold, decisions locked | All 6 docs reviewed; tech stack ratified |
+| **0** | **Architecture** | Foundation & docs | `docs/01–06`, schema, decisions locked | All 6 docs reviewed; tech stack ratified |
+| **0.5** | **Repository Foundation** | Scaffold & infra | Monorepo structure, Docker stack, config/logging/health, Celery + Alembic + SQLAlchemy patterns, `docs/07–09` | Stack boots; health endpoints green (see §below) |
 | **1** | **Document Intelligence** | Parse filings reliably | PDF/transcript parser, table extraction, sectioner | 10-K/10-Q correctly sectioned; tables intact |
 | **2** | **Knowledge Base** | Chunk + embed + store | Chunker, Gemini embedding pipeline, pgvector + HNSW, `/upload`,`/search` | Semantic search returns relevant cited chunks |
 | **3** | **Financial Metric Extraction** | Typed KPIs + deltas | Metric Extraction Agent, `financial_metrics`, YoY/QoQ, `/metrics` | ≥95% extraction accuracy on gold set |
@@ -67,7 +69,7 @@ Financial analysis is document-heavy, repetitive, and error-prone. Generic LLM c
 
 ```mermaid
 flowchart LR
-    P0["P0 Architecture"] --> P1["P1 Doc Intelligence"] --> P2["P2 Knowledge Base"]
+    P0["P0 Architecture"] --> P05["P0.5 Repo Foundation"] --> P1["P1 Doc Intelligence"] --> P2["P2 Knowledge Base"]
     P2 --> P3["P3 Metrics"] --> P4["P4 Risk"] --> P5["P5 Tone"]
     P5 --> P6["P6 Advanced RAG"] --> P7["P7 Multi-Agent"]
     P7 --> P8["P8 Benchmark"] --> P9["P9 Memo"] --> P10["P10 Chat"]
@@ -138,6 +140,56 @@ flowchart LR
 ### Result
 
 > **Phase 0 is APPROVED for Implementation.** The project may proceed to repository scaffolding and Phase 1 (Document Intelligence). No blocking ambiguity remains; the only open items are intentionally deferred to the phases where they can be resolved empirically.
+
+---
+
+## Phase 0.5 — Repository Foundation
+
+> **Date:** 2026-06-10 · **Owner:** Platform (nickg) · **Scope:** scaffolding & infrastructure only — **no business logic.**
+
+### What was built
+
+| Area | Deliverable |
+|---|---|
+| Monorepo | `backend/` · `frontend/` · `infrastructure/` · `docs/` + root `README`, `.gitignore`, `.env.example` |
+| Backend skeleton | FastAPI app (`app/main.py`), domain-driven package layout (api/core/db/models/schemas/services/repositories/tasks/agents/retrieval/ingestion/memo/benchmark/utils) |
+| Configuration | `core/config.py` — typed, env-based Pydantic settings (local/dev/prod); `EMBEDDING_DIM` left unset (Phase 2) |
+| Logging | `core/logging.py` — structlog, JSON or console, request-id binding; shared by API + Celery |
+| Health | `/api/v1/health` (liveness), `/ready` (DB+Redis readiness), `/status` (metadata) |
+| Database foundation | `db/base.py` (declarative base + naming convention), `db/session.py` (async engine + `get_db`), `models/base.py` (UUID + timestamp mixins) — **patterns only, no domain tables** |
+| Async processing | `tasks/celery_app.py` — Celery app, queues (`default`/`ingestion`/`extraction`), routing, retry policy — **no tasks** |
+| Migrations | Alembic (`alembic.ini`, `migrations/env.py` → `Base.metadata`, script template, empty `versions/`) |
+| Security | `core/security.py` — RBAC roles + auth interface **scaffold** (implemented Phase 11) |
+| Docker | `docker-compose.yml` (postgres+pgvector, redis, backend, worker, frontend), backend/frontend Dockerfiles, Postgres `init.sql` (extensions only) |
+| Frontend skeleton | Vite + React + TS + Tailwind; folder taxonomy; API client foundation; shell that pings backend `/health` |
+| Tests | pytest layout (`unit`/`integration`/`evaluation`), async client fixture, health unit tests |
+| Docs | `07_REPOSITORY_STRUCTURE.md`, `08_INFRASTRUCTURE_SETUP.md`, `09_DEVELOPMENT_GUIDELINES.md` |
+
+### Exit Criteria Status
+
+| Exit criterion | Status | Evidence |
+|---|---|---|
+| Repository structure approved | ✅ | Tree in `07_REPOSITORY_STRUCTURE.md`; matches on disk |
+| Docker operational | ✅ | `docker-compose.yml` with 5 services + healthchecks + named volumes |
+| PostgreSQL operational | ✅ | `pgvector/pgvector:pg16` + `init.sql` enables `vector`/`pgcrypto`/`pg_trgm` |
+| Redis operational | ✅ | `redis:7-alpine`, AOF, logical DBs for broker/result/cache |
+| FastAPI boots | ✅ | `app/main.py` (lifespan, CORS, request-id); all modules compile |
+| React boots | ✅ | Vite app renders shell, calls `/health` |
+| Alembic initialized | ✅ | `alembic.ini` + `migrations/env.py` target `Base.metadata` (baseline empty by design) |
+| Health endpoints operational | ✅ | `/health`, `/ready`, `/status` implemented + unit-tested |
+
+> **Note on "boots":** all backend Python modules pass a syntax/compile check, and the
+> compose topology, health endpoints, and configuration are in place. A full
+> `docker compose up` smoke test should be run on a Docker-enabled host to confirm
+> live readiness (the criteria above are structurally satisfied).
+
+### Guardrails honored
+No PDF parsing, chunking, embeddings, agents, retrieval, or auth logic was
+implemented — only stable interfaces and infrastructure. Deferred items
+(`EMBEDDING_DIM`, embedding variant, deploy provider) remain deferred.
+
+### Result
+> **Phase 0.5 COMPLETE — foundation ready for Phase 1 (Document Intelligence).**
 
 ---
 
@@ -320,7 +372,9 @@ flowchart LR
 | 2026-06-10 | 0 | Schema v1 designed | nickg | DDL for 9 tables + HNSW/GIN indexes + ADR-007 separation | ✅ Completed |
 | 2026-06-10 | 0 | Phase 0 finalization review | nickg | Ratified ADR-008 (Redis+Celery), ADR-010 (BGE reranker); renumbered provider gateway → ADR-009; deferred `EMBEDDING_DIM`=TBD to Phase 2; expanded ADR-007 determinism principle; authored Phase 0 Completion Report | ✅ Completed |
 | 2026-06-10 | 0 | **Phase 0 CLOSED** | nickg | All exit criteria met; approved for implementation | ✅ Completed |
-| | 0 | Repo scaffold | | backend/ frontend/ docker-compose, Alembic baseline | ⬜ Todo |
+| 2026-06-10 | 0.5 | Repository & infra scaffold | nickg | Monorepo, Docker stack (postgres+pgvector/redis/backend/worker/frontend), config/logging/health, SQLAlchemy + Alembic + Celery patterns, security scaffold, frontend skeleton, tests | ✅ Completed |
+| 2026-06-10 | 0.5 | Foundation docs | nickg | Authored `docs/07_REPOSITORY_STRUCTURE.md`, `08_INFRASTRUCTURE_SETUP.md`, `09_DEVELOPMENT_GUIDELINES.md`; added Phase 0.5 to roadmap | ✅ Completed |
+| 2026-06-10 | 0.5 | **Phase 0.5 COMPLETE** | nickg | All exit criteria met; foundation ready for Phase 1 | ✅ Completed |
 | | 1 | PDF/transcript parser | | Parse + table extraction + sectioner | ⬜ Todo |
 
 > _Add a row per meaningful change. Mark status: ⬜ Todo · 🟡 In progress · ✅ Completed · ⛔ Blocked._

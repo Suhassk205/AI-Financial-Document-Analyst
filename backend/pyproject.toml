@@ -1,0 +1,40 @@
+# Tooling configuration only. Runtime deps live in requirements*.txt.
+[project]
+name = "ai-financial-document-analyst-backend"
+version = "0.0.1"
+description = "Backend for the AI Financial Document Analyst (Phase 0.5 foundation)."
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+# E/F: pyflakes+pycodestyle, I: isort, B: bugbear, UP: pyupgrade, N: naming
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "unit: fast, isolated tests with no external services",
+    "integration: tests requiring postgres/redis",
+    "evaluation: retrieval/extraction accuracy evaluations (future)",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/main.py", "migrations/*"]
