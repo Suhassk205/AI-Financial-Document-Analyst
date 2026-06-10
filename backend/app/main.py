@@ -14,9 +14,11 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.exceptions import AppError
 from app.core.logging import configure_logging, get_logger
 
 
@@ -61,6 +63,27 @@ async def request_context_middleware(
         structlog.contextvars.clear_contextvars()
     response.headers["X-Request-Id"] = request_id
     return response
+
+
+# ---- Exception handling ------------------------------------------------------
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    """Translate domain errors into the standard error envelope (docs/04 §5)."""
+    request_id = request.headers.get("X-Request-Id")
+    get_logger(__name__).warning(
+        "app_error", code=exc.code, status=exc.status_code, message=exc.message
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+                "request_id": request_id,
+            }
+        },
+    )
 
 
 # ---- Routers -----------------------------------------------------------------

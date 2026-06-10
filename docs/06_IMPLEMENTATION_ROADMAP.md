@@ -15,6 +15,7 @@
 2. [Phase Breakdown](#2-phase-breakdown)
    - ⭐ [Phase 0 Completion Report](#phase-0-completion-report)
    - ⭐ [Phase 0.5 — Repository Foundation](#phase-05--repository-foundation)
+   - ⭐ [Phase 1A — Document Ingestion Foundation](#phase-1a--document-ingestion-foundation)
 3. [Technology Decisions Log](#3-technology-decisions-log)
 4. [Architecture Decision Records (ADR)](#4-architecture-decision-records-adr)
 5. [Implementation Log](#5-implementation-log)
@@ -54,7 +55,8 @@ Financial analysis is document-heavy, repetitive, and error-prone. Generic LLM c
 |---|---|---|---|---|
 | **0** | **Architecture** | Foundation & docs | `docs/01–06`, schema, decisions locked | All 6 docs reviewed; tech stack ratified |
 | **0.5** | **Repository Foundation** | Scaffold & infra | Monorepo structure, Docker stack, config/logging/health, Celery + Alembic + SQLAlchemy patterns, `docs/07–09` | Stack boots; health endpoints green (see §below) |
-| **1** | **Document Intelligence** | Parse filings reliably | PDF/transcript parser, table extraction, sectioner | 10-K/10-Q correctly sectioned; tables intact |
+| **1A** | **Document Ingestion** ✅ | Upload + raw PDF extraction | Upload/store/queue, PyMuPDF parser, `companies`/`reports`/`report_pages`, report APIs | PDF→pages persisted; status tracked (DONE) |
+| **1B** | **Document Intelligence** | Section detection | Sectioner (10-K/10-Q item map), transcript segmentation, table handling | Sections correctly identified |
 | **2** | **Knowledge Base** | Chunk + embed + store | Chunker, Gemini embedding pipeline, pgvector + HNSW, `/upload`,`/search` | Semantic search returns relevant cited chunks |
 | **3** | **Financial Metric Extraction** | Typed KPIs + deltas | Metric Extraction Agent, `financial_metrics`, YoY/QoQ, `/metrics` | ≥95% extraction accuracy on gold set |
 | **4** | **Risk Intelligence** | Risks + evolution | Risk Analysis Agent, `risk_factors`, diff engine, `/risks` | Correct NEW/REMOVED/MODIFIED labeling |
@@ -193,6 +195,53 @@ implemented — only stable interfaces and infrastructure. Deferred items
 
 ---
 
+## Phase 1A — Document Ingestion Foundation
+
+> **Date:** 2026-06-10 · **Owner:** Backend (nickg) · **Scope:** upload → store → record → queue → PDF extraction → page persistence. Detailed report: `docs/10_PHASE_1A_IMPLEMENTATION.md`.
+
+### Implementation summary
+A user uploads a financial PDF; the API validates (extension/MIME/size/magic
+bytes), stores it under a UUID name, creates a `reports` record (status
+`UPLOADED`), and enqueues a Celery task. The worker parses the PDF with **PyMuPDF**,
+persists one `report_pages` row per page, and moves the report through
+`PROCESSING → PROCESSED` (or `FAILED` with a recorded reason). Four endpoints
+expose upload, list, detail, and page-text inspection.
+
+### Architecture changes
+- **New tables:** `companies`, `reports`, `report_pages` (migration `0001_phase1a`,
+  the schema baseline). Enums as `VARCHAR + CHECK`. **No pgvector column** (Phase 2).
+- **New modules:** `models/{enums,company,report,report_page}.py`,
+  `schemas/report.py`, `repositories/report_repository.py` (async + sync),
+  `ingestion/{storage,pdf_parser,validation}.py`,
+  `ingestion/services/report_ingestion_service.py`, `tasks/ingestion.py`,
+  `api/v1/endpoints/reports.py`, `core/exceptions.py`.
+- **Infra wiring:** sync engine/session added for the Celery worker; `process_report`
+  registered and routed to the `ingestion` queue; domain-error → HTTP envelope handler.
+
+### Technical decisions
+- **PyMuPDF** for extraction (TDL-011): fast, accurate text + metadata, permissive
+  to operate. Alternatives (pdfplumber/unstructured/pypdf) deferred/declined for 1A.
+- **Sync worker, async API:** dedicated sync SQLAlchemy session for Celery avoids
+  async-engine/event-loop pitfalls; the request path stays fully async.
+- **Failure = recorded outcome, not crash-loop:** corrupt PDFs are deterministic, so
+  the task marks `FAILED` and returns instead of retrying endlessly.
+- **Never trust filenames:** UUID storage names + magic-byte (`%PDF-`) validation.
+
+### Lessons learned
+- Separating sync/async data access early kept the worker clean (no SQL in the task).
+- Validate at the boundary, defend at the DB (CHECK constraints) — layered safety.
+- Store provenance (relative `storage_path`), not the bytes, in the DB.
+
+### Exit criteria
+All 10 Phase 1A exit criteria met (PDF upload, record, storage, task, extraction,
+page persistence, status updates, correct APIs, tests, docs). **19 unit tests pass;**
+integration suite (DB-backed) authored for CI. Full table in `docs/10`.
+
+### Result
+> **Phase 1A COMPLETE.** Phase 1B (section detection / normalization) NOT started — out of scope.
+
+---
+
 ## 3. Technology Decisions Log
 
 > Template: **Decision · Alternatives Considered · Chosen Because · Tradeoffs · Expected Impact**
@@ -266,6 +315,13 @@ implemented — only stable interfaces and infrastructure. Deferred items
 - **Chosen because:** strong performance, fast, cheap, deterministic, runs locally on the critical path
 - **Tradeoffs:** local model dependency; LLM re-ranking kept only as an offline eval layer
 - **Expected impact:** higher retrieval precision with bounded latency and reproducible results (see ADR-010)
+
+### TDL-011 — PDF extraction library (Phase 1A)
+- **Decision:** PyMuPDF (`pymupdf`, imported as `fitz`)
+- **Alternatives:** pdfplumber, pypdf, unstructured
+- **Chosen because:** fast C-backed extraction, reliable per-page text + document metadata, simple API, good layout fidelity for financial filings
+- **Tradeoffs:** AGPL/commercial licensing to track; no OCR (image-only PDFs unsupported in 1A)
+- **Expected impact:** robust raw-text foundation for chunking/structure in later phases
 
 ---
 
@@ -375,7 +431,14 @@ implemented — only stable interfaces and infrastructure. Deferred items
 | 2026-06-10 | 0.5 | Repository & infra scaffold | nickg | Monorepo, Docker stack (postgres+pgvector/redis/backend/worker/frontend), config/logging/health, SQLAlchemy + Alembic + Celery patterns, security scaffold, frontend skeleton, tests | ✅ Completed |
 | 2026-06-10 | 0.5 | Foundation docs | nickg | Authored `docs/07_REPOSITORY_STRUCTURE.md`, `08_INFRASTRUCTURE_SETUP.md`, `09_DEVELOPMENT_GUIDELINES.md`; added Phase 0.5 to roadmap | ✅ Completed |
 | 2026-06-10 | 0.5 | **Phase 0.5 COMPLETE** | nickg | All exit criteria met; foundation ready for Phase 1 | ✅ Completed |
-| | 1 | PDF/transcript parser | | Parse + table extraction + sectioner | ⬜ Todo |
+| 2026-06-10 | 1A | Ingestion schema | nickg | `companies`/`reports`/`report_pages` models + migration `0001_phase1a` (baseline) | ✅ Completed |
+| 2026-06-10 | 1A | PDF extraction engine | nickg | PyMuPDF parser (`ingestion/pdf_parser.py`): page text + metadata | ✅ Completed |
+| 2026-06-10 | 1A | Storage + validation | nickg | UUID-named local storage (YYYY/MM); ext/MIME/size/magic-byte validation | ✅ Completed |
+| 2026-06-10 | 1A | Ingestion service + task | nickg | `ReportIngestionService` + `process_report` Celery task (sync worker) | ✅ Completed |
+| 2026-06-10 | 1A | Report APIs | nickg | upload / list / detail / pages under `/api/v1/reports` | ✅ Completed |
+| 2026-06-10 | 1A | Tests + docs | nickg | 19 unit tests pass; integration suite authored; `docs/10` | ✅ Completed |
+| 2026-06-10 | 1A | **Phase 1A COMPLETE** | nickg | All exit criteria met; 1B not started | ✅ Completed |
+| | 1B | Section detection / sectioner | | 10-K/10-Q item map; transcript segmentation | ⬜ Todo |
 
 > _Add a row per meaningful change. Mark status: ⬜ Todo · 🟡 In progress · ✅ Completed · ⛔ Blocked._
 
@@ -412,9 +475,10 @@ implemented — only stable interfaces and infrastructure. Deferred items
 | Sub-area | Entry | Date |
 |---|---|---|
 | Mistakes made | _(none yet)_ | |
-| Refactoring decisions | _(none yet)_ | |
+| Refactoring decisions | (1A) Added a dedicated **sync** engine/session for Celery rather than driving the async engine inside tasks — avoids event-loop lifecycle bugs. | 2026-06-10 |
 | Performance improvements | _(none yet)_ | |
 | Retrieval improvements | _(none yet)_ | |
+| Robustness (1A) | Magic-byte (`%PDF-`) check beyond extension/MIME; idempotent `replace_pages` so re-processing is safe; failures recorded as `FAILED` not crash-loops. | 2026-06-10 |
 
 ---
 
@@ -424,7 +488,7 @@ implemented — only stable interfaces and infrastructure. Deferred items
 
 | Metric | Definition | Target | Current |
 |---|---|---|---|
-| Documents processed | Count of READY reports | — | 0 |
+| Documents processed | Count of PROCESSED reports | — | 0 (ingestion pipeline live as of 1A) |
 | Retrieval accuracy | Relevant-chunk hit rate on eval set (recall@k) | ≥ 0.90 | n/a |
 | Extraction accuracy | Correct metrics vs gold labels | ≥ 0.95 | n/a |
 | Risk detection accuracy | Correct risk + change_type vs labels | ≥ 0.90 | n/a |

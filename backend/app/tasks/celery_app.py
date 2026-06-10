@@ -23,8 +23,8 @@ celery_app = Celery(
     "fda",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    # Task modules are auto-discovered here once they exist (Phase 1+).
-    include=[],
+    # Task modules registered with the worker (Phase 1A: ingestion).
+    include=["app.tasks.ingestion"],
 )
 
 # ---------------------------------------------------------------------------

@@ -12,12 +12,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
@@ -50,3 +51,25 @@ async def ping() -> bool:
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     return True
+
+
+# ---------------------------------------------------------------------------
+# Synchronous engine/session — used by Celery workers.
+# Celery tasks run in a synchronous context; rather than driving the async
+# engine across ad-hoc event loops, the worker uses a plain sync session
+# (psycopg driver, same as Alembic). The API layer remains fully async.
+# ---------------------------------------------------------------------------
+sync_engine = create_engine(
+    settings.database_url_sync,
+    echo=settings.db_echo,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_pre_ping=True,
+)
+
+SyncSessionLocal = sessionmaker(
+    bind=sync_engine,
+    class_=Session,
+    expire_on_commit=False,
+    autoflush=False,
+)

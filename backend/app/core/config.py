@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
+    # ---- Uploads (Phase 1A) ----
+    max_upload_size_mb: int = 50
+    allowed_upload_extensions: str = ".pdf"
+    allowed_upload_content_types: str = "application/pdf,application/x-pdf"
+
     # ---- Object storage ----
     storage_backend: str = "local"
     storage_local_path: str = "./data/uploads"
@@ -98,6 +103,18 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == Environment.PRODUCTION
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.max_upload_size_mb * 1024 * 1024
+
+    @property
+    def allowed_upload_extensions_set(self) -> set[str]:
+        return {e.strip().lower() for e in self.allowed_upload_extensions.split(",") if e.strip()}
+
+    @property
+    def allowed_upload_content_types_set(self) -> set[str]:
+        return {c.strip().lower() for c in self.allowed_upload_content_types.split(",") if c.strip()}
 
 
 @lru_cache

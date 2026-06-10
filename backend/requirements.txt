@@ -22,6 +22,9 @@ psycopg[binary]~=3.2            # sync driver (Alembic migrations)
 alembic~=1.13
 pgvector~=0.3                   # SQLAlchemy type for the vector column (used Phase 2)
 
+# --- Document parsing (Phase 1A) ---
+pymupdf~=1.24                   # PDF text + metadata extraction (imported as `fitz`)
+
 # --- Async task queue ---
 celery~=5.4
 redis~=5.2
@@ -39,4 +42,3 @@ python-jose[cryptography]~=3.3
 # google-genai~=0.3            # Phase 2/3 — Gemini LLM + embeddings
 # httpx~=0.27                  # OpenRouter fallback client (Phase 3)
 # FlagEmbedding                # Phase 6 — BAAI/bge-reranker-base
-# pypdf / pdfplumber / unstructured  # Phase 1 — document parsing
