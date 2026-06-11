@@ -46,8 +46,9 @@ def _clean_tables() -> Generator[None, None, None]:
     with sync_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE risk_evolution, risk_factors, metric_comparisons, financial_metrics, document_chunks, "
-                "report_sections, report_pages, reports, companies RESTART IDENTITY CASCADE"
+                "TRUNCATE conversation_messages, conversation_threads, risk_evolution, risk_factors, "
+                "metric_comparisons, financial_metrics, document_chunks, report_sections, report_pages, "
+                "reports, companies RESTART IDENTITY CASCADE"
             )
         )
 

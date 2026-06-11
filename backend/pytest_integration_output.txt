@@ -1,0 +1,276 @@
+EE                                                                       [100%]
+==================================== ERRORS ====================================
+________________ ERROR at setup of test_agent_thread_lifecycle _________________
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:144: in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3319: in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:448: in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:1272: in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:712: in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:178: in _do_get
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:176: in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:389: in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:674: in __init__
+    self.__connect()
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:900: in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:896: in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/create.py:667: in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/default.py:630: in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/psycopg/connection.py:130: in connect
+    raise new_ex.with_traceback(None)
+E   psycopg.OperationalError: connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   Multiple connection attempts failed. All failures were:
+E   - host: 'localhost', port: 5432, hostaddr: '::1': connection failed: connection to server at "::1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   - host: 'localhost', port: 5432, hostaddr: '127.0.0.1': connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+
+The above exception was the direct cause of the following exception:
+tests/integration/conftest.py:31: in _schema
+    with sync_engine.begin() as conn:
+         ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3259: in begin
+    with self.connect() as conn:
+         ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3295: in connect
+    return self._connection_cls(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:146: in __init__
+    Connection._handle_dbapi_exception_noconnection(
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:2450: in _handle_dbapi_exception_noconnection
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:144: in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3319: in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:448: in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:1272: in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:712: in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:178: in _do_get
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:176: in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:389: in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:674: in __init__
+    self.__connect()
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:900: in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:896: in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/create.py:667: in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/default.py:630: in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/psycopg/connection.py:130: in connect
+    raise new_ex.with_traceback(None)
+E   sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   Multiple connection attempts failed. All failures were:
+E   - host: 'localhost', port: 5432, hostaddr: '::1': connection failed: connection to server at "::1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   - host: 'localhost', port: 5432, hostaddr: '127.0.0.1': connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   (Background on this error at: https://sqlalche.me/e/20/e3q8)
+________________ ERROR at setup of test_agent_chat_and_history _________________
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:144: in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3319: in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:448: in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:1272: in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:712: in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:178: in _do_get
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:176: in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:389: in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:674: in __init__
+    self.__connect()
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:900: in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:896: in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/create.py:667: in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/default.py:630: in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/psycopg/connection.py:130: in connect
+    raise new_ex.with_traceback(None)
+E   psycopg.OperationalError: connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   Multiple connection attempts failed. All failures were:
+E   - host: 'localhost', port: 5432, hostaddr: '::1': connection failed: connection to server at "::1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   - host: 'localhost', port: 5432, hostaddr: '127.0.0.1': connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+
+The above exception was the direct cause of the following exception:
+tests/integration/conftest.py:31: in _schema
+    with sync_engine.begin() as conn:
+         ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3259: in begin
+    with self.connect() as conn:
+         ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3295: in connect
+    return self._connection_cls(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:146: in __init__
+    Connection._handle_dbapi_exception_noconnection(
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:2450: in _handle_dbapi_exception_noconnection
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:144: in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/base.py:3319: in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:448: in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:1272: in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:712: in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:178: in _do_get
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/impl.py:176: in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:389: in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:674: in __init__
+    self.__connect()
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:900: in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/util/langhelpers.py:122: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.14/site-packages/sqlalchemy/pool/base.py:896: in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/create.py:667: in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/sqlalchemy/engine/default.py:630: in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/psycopg/connection.py:130: in connect
+    raise new_ex.with_traceback(None)
+E   sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   Multiple connection attempts failed. All failures were:
+E   - host: 'localhost', port: 5432, hostaddr: '::1': connection failed: connection to server at "::1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   - host: 'localhost', port: 5432, hostaddr: '127.0.0.1': connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "analyst" does not exist
+E   (Background on this error at: https://sqlalche.me/e/20/e3q8)
+=============================== warnings summary ===============================
+app/schemas/tone.py:31
+  /home/pranav/Documents/AI Financial Document Analyst/backend/app/schemas/tone.py:31: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ManagementToneResponse(ManagementToneBase):
+
+app/schemas/tone.py:43
+  /home/pranav/Documents/AI Financial Document Analyst/backend/app/schemas/tone.py:43: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ToneEvolutionResponse(BaseModel):
+
+.venv/lib/python3.14/site-packages/google/genai/types.py:42
+  /home/pranav/Documents/AI Financial Document Analyst/backend/.venv/lib/python3.14/site-packages/google/genai/types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+.venv/lib/python3.14/site-packages/langgraph/cache/base/__init__.py:8
+  /home/pranav/Documents/AI Financial Document Analyst/backend/.venv/lib/python3.14/site-packages/langgraph/cache/base/__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+.venv/lib/python3.14/site-packages/langgraph/_internal/_runnable.py:485
+.venv/lib/python3.14/site-packages/langgraph/_internal/_runnable.py:485
+.venv/lib/python3.14/site-packages/langgraph/_internal/_runnable.py:485
+.venv/lib/python3.14/site-packages/langgraph/_internal/_runnable.py:485
+.venv/lib/python3.14/site-packages/langgraph/_internal/_runnable.py:485
+  /home/pranav/Documents/AI Financial Document Analyst/backend/.venv/lib/python3.14/site-packages/langgraph/_internal/_runnable.py:485: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    asyncio.iscoroutinefunction(func)
+
+app/schemas/agent.py:37
+  /home/pranav/Documents/AI Financial Document Analyst/backend/app/schemas/agent.py:37: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ThreadOut(BaseModel):
+
+app/schemas/agent.py:48
+  /home/pranav/Documents/AI Financial Document Analyst/backend/app/schemas/agent.py:48: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class MessageOut(BaseModel):
+
+tests/integration/test_agent_api.py::test_agent_thread_lifecycle
+  /home/pranav/Documents/AI Financial Document Analyst/backend/.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:1216: DeprecationWarning: 'asyncio.get_event_loop_policy' is deprecated and slated for removal in Python 3.16
+    return asyncio.get_event_loop_policy()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR tests/integration/test_agent_api.py::test_agent_thread_lifecycle - sqla...
+ERROR tests/integration/test_agent_api.py::test_agent_chat_and_history - sqla...
+12 warnings, 2 errors in 1.46s

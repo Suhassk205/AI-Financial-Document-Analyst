@@ -17,6 +17,8 @@ from app.models.tone_evolution import ToneEvolution
 from app.models.report import Report
 from app.models.report_page import ReportPage
 from app.models.report_section import ReportSection
+from app.models.conversation_thread import ConversationThread
+from app.models.conversation_message import ConversationMessage
 
 __all__ = [
     "Company",
@@ -33,5 +35,7 @@ __all__ = [
     "ReportSection",
     "ReportStatus",
     "ReportType",
+    "ConversationThread",
+    "ConversationMessage",
 ]
 

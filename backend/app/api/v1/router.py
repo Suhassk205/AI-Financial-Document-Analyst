@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     search,
     tone,
     rag,
+    agent,
 )
 
 api_router = APIRouter()
@@ -59,6 +60,9 @@ api_router.include_router(tone.router, tags=["tone"])
 
 # Advanced Retrieval & RAG (Phase 6)
 api_router.include_router(rag.router, prefix="/rag", tags=["rag"])
+
+# Financial Analyst Agent System (Phase 7)
+api_router.include_router(agent.router, prefix="/agent", tags=["agent"])
 
 # --- Business routers (added per phase) ---------------------------------------
 # api_router.include_router(benchmark.router, prefix="/benchmark", tags=["benchmark"])  # Phase 8
