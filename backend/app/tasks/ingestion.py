@@ -19,6 +19,11 @@ from app.ingestion.pdf_parser import parse_pdf
 from app.ingestion.section_detection import SectionDetector
 from app.ingestion.storage import get_storage
 from app.repositories.report_repository import SyncReportRepository
+from app.retrieval.embeddings import (
+    EmbeddingProviderError,
+    EmbeddingService,
+    GeminiEmbeddingProvider,
+)
 from app.tasks.celery_app import celery_app
 
 log = get_logger(__name__)
@@ -195,10 +200,88 @@ def generate_chunks(report_id: str) -> dict:
             repo.mark_chunked(report)
 
             log.info("chunking.success", report_id=report_id, chunks=count)
+            # NOTE: embedding generation (Phase 2A) is NOT auto-chained here. It
+            # calls a paid external API, so it is an explicit operational action
+            # triggered via POST /reports/{id}/embeddings/generate. This keeps the
+            # deterministic ingestion pipeline offline-testable and avoids
+            # unplanned API spend on every upload.
             return {"report_id": report_id, "status": "CHUNKED", "chunks": count}
 
         except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
             log.error("chunking.failure", report_id=report_id, error=str(exc))
+            session.rollback()
+            failed = repo.get_report(rid)
+            if failed is not None:
+                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.ingestion.generate_embeddings_task",
+    acks_late=True,
+    max_retries=3,
+    default_retry_delay=30,
+)
+def generate_embeddings_task(self, report_id: str, *, force: bool = False) -> dict:
+    """Generate + store Gemini embeddings for a report's chunks (Phase 2A).
+
+    Workflow: load report → EMBEDDING → load chunks needing embeddings →
+    batch-generate via Gemini → validate → store vector + mark COMPLETED →
+    EMBEDDED (iff every chunk now has a vector). Idempotent: re-running only
+    embeds chunks still missing a vector.
+
+    Retry support: a transient provider failure that escapes the provider's own
+    in-batch retries triggers a bounded Celery retry of the whole (idempotent)
+    run. Permanent failures (config, no chunks, partial chunk failures) are
+    recorded as FAILED with a reason — no crash-loop.
+    """
+    rid = uuid.UUID(report_id)
+    log.info("embedding.task_start", report_id=report_id, force=force)
+
+    with SyncSessionLocal() as session:
+        repo = SyncReportRepository(session)
+        report = repo.get_report(rid)
+        if report is None:
+            log.warning("embedding.report_missing", report_id=report_id)
+            return {"report_id": report_id, "status": "MISSING"}
+
+        try:
+            provider = GeminiEmbeddingProvider.from_settings()
+            service = EmbeddingService(repo, provider)
+            metrics = service.generate_for_report(rid, force=force)
+
+            if metrics.failed > 0:
+                # Partial failure: record it so operators see it; a re-run (or the
+                # generate endpoint) retries only the still-missing chunks.
+                msg = f"{metrics.failed}/{metrics.total_chunks} chunks failed embedding"
+                log.error("embedding.partial_failure", report_id=report_id, **metrics.as_dict())
+                failed = repo.get_report(rid)
+                if failed is not None:
+                    repo.mark_failed(failed, message=msg)
+                return {"report_id": report_id, "status": "FAILED", **metrics.as_dict()}
+
+            log.info("embedding.task_success", report_id=report_id, **metrics.as_dict())
+            return {"report_id": report_id, "status": "EMBEDDED", **metrics.as_dict()}
+
+        except EmbeddingProviderError as exc:
+            session.rollback()
+            if getattr(exc, "retryable", False) and self.request.retries < self.max_retries:
+                log.warning(
+                    "embedding.task_retry",
+                    report_id=report_id,
+                    attempt=self.request.retries + 1,
+                    error=str(exc),
+                )
+                raise self.retry(exc=exc)  # noqa: B904 - Celery retry idiom (re-raises Retry)
+            log.error("embedding.task_failure", report_id=report_id, error=str(exc))
+            failed = repo.get_report(rid)
+            if failed is not None:
+                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
+
+        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
+            log.error("embedding.task_failure", report_id=report_id, error=str(exc))
             session.rollback()
             failed = repo.get_report(rid)
             if failed is not None:

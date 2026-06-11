@@ -39,7 +39,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE reports DROP CONSTRAINT IF EXISTS report_status")
     op.execute("ALTER TABLE reports DROP CONSTRAINT IF EXISTS ck_reports_report_status")
     op.create_check_constraint(
-        "ck_reports_report_status", "reports", _status_check(_NEW_STATUSES)
+        "report_status", "reports", _status_check(_NEW_STATUSES)
     )
 
     # ---- report_sections ----------------------------------------------------
@@ -85,5 +85,5 @@ def downgrade() -> None:
     # Revert status values (will fail if any row uses SECTIONING/SECTIONED).
     op.execute("ALTER TABLE reports DROP CONSTRAINT IF EXISTS ck_reports_report_status")
     op.create_check_constraint(
-        "ck_reports_report_status", "reports", _status_check(_OLD_STATUSES)
+        "report_status", "reports", _status_check(_OLD_STATUSES)
     )

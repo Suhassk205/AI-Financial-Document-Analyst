@@ -30,6 +30,9 @@ fitz = pytest.importorskip("fitz", reason="PyMuPDF not installed")
 def _schema() -> Generator[None, None, None]:
     with sync_engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+        # Phase 2A: document_chunks now has a pgvector `vector(768)` column, so the
+        # extension must exist before create_all builds the table.
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         Base.metadata.create_all(conn)
     yield
     with sync_engine.begin() as conn:
@@ -66,7 +69,7 @@ async def api_client(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[AsyncCli
     app.dependency_overrides[get_db] = _override_get_db
 
     class _Task:
-        def delay(self, report_id: str) -> None:  # no broker in tests
+        def delay(self, *args, **kwargs) -> None:  # no broker in tests
             return None
 
     # Stub the pipeline tasks: upload→process_report→detect_sections→generate_chunks
@@ -74,6 +77,9 @@ async def api_client(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[AsyncCli
     monkeypatch.setattr("app.tasks.ingestion.process_report", _Task())
     monkeypatch.setattr("app.tasks.ingestion.detect_sections", _Task())
     monkeypatch.setattr("app.tasks.ingestion.generate_chunks", _Task())
+    # Phase 2A: the embeddings endpoint enqueues generate_embeddings_task.delay();
+    # stub it in the endpoint's namespace so no broker is needed.
+    monkeypatch.setattr("app.api.v1.endpoints.embeddings.generate_embeddings_task", _Task())
 
     async with LifespanManager(app):
         transport = ASGITransport(app=app)

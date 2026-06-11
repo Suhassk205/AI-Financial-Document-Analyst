@@ -1,7 +1,7 @@
 # 06 — Implementation Roadmap
 
 > **Document status:** LIVING DOCUMENT — update continuously
-> **Last updated:** 2026-06-10
+> **Last updated:** 2026-06-11
 > **Role:** Engineering diary · execution blueprint · architectural decision record (ADR)
 > **Audience:** Everyone — engineers, evaluators, professors, hackathon judges, future maintainers
 
@@ -18,6 +18,7 @@
    - ⭐ [Phase 1A — Document Ingestion Foundation](#phase-1a--document-ingestion-foundation)
    - ⭐ [Phase 1B Completion Report — Financial Section Intelligence](#phase-1b-completion-report--financial-section-intelligence)
    - ⭐ [Phase 1C Completion Report — Knowledge Preparation Layer](#phase-1c-completion-report--knowledge-preparation-layer)
+   - ⭐ [Phase 2A Completion Report — Embedding Infrastructure](#phase-2a-completion-report--embedding-infrastructure)
 3. [Technology Decisions Log](#3-technology-decisions-log)
 4. [Architecture Decision Records (ADR)](#4-architecture-decision-records-adr)
 5. [Implementation Log](#5-implementation-log)
@@ -60,7 +61,8 @@ Financial analysis is document-heavy, repetitive, and error-prone. Generic LLM c
 | **1A** | **Document Ingestion** ✅ | Upload + raw PDF extraction | Upload/store/queue, PyMuPDF parser, `companies`/`reports`/`report_pages`, report APIs | PDF→pages persisted; status tracked (DONE) |
 | **1B** | **Section Intelligence** ✅ | Rule-based section detection | `report_sections`, detection engine + configurable taxonomy, section APIs, status lifecycle | Sections detected/normalized/stored for 10-K/10-Q/transcript (DONE) |
 | **1C** | **Knowledge Preparation** ✅ | Section-aware recursive chunking | `document_chunks` (+metadata, no vectors), chunking engine, token counter, validation, chunk APIs | Validated chunks + metadata stored for 10-K/10-Q/transcript (DONE) |
-| **2** | **Knowledge Base** | Chunk + embed + store | Chunker, Gemini embedding pipeline, pgvector + HNSW, `/upload`,`/search` | Semantic search returns relevant cited chunks |
+| **2A** | **Embedding Infrastructure** ✅ | Embed + store (no search) | `gemini-embedding-001`→`vector(768)`, provider layer, embedding APIs/status; **no ANN index** | Every chunk has a valid stored embedding (DONE) |
+| **2B** | **Knowledge Base (Search)** | Index + retrieve | HNSW on `vector(768)`, query embedding, hybrid retrieval, `/search` | Semantic search returns relevant cited chunks |
 | **3** | **Financial Metric Extraction** | Typed KPIs + deltas | Metric Extraction Agent, `financial_metrics`, YoY/QoQ, `/metrics` | ≥95% extraction accuracy on gold set |
 | **4** | **Risk Intelligence** | Risks + evolution | Risk Analysis Agent, `risk_factors`, diff engine, `/risks` | Correct NEW/REMOVED/MODIFIED labeling |
 | **5** | **Management Tone Analysis** | Sentiment/confidence | Tone Agent, `tone_analysis`, rubric scoring, trends | Stable, rubric-anchored scores with citations |
@@ -131,6 +133,10 @@ flowchart LR
 | **Embedding dimension (`EMBEDDING_DIM`)** | Phase 2 | Fixed only once the embedding model is selected and benchmarked; avoids premature schema lock-in (see `02_DATABASE_DESIGN.md` §6.1) |
 | **Specific Gemini embedding variant** | Phase 2 | Quality/cost/latency trade-off must be tested against our own corpus |
 | **Production deployment provider** | Phase 11 | Not on the critical path for build-out; abstracted behind containers + managed services |
+
+> **Update (2026-06-11, Phase 2A):** the first two are now **RESOLVED** — `EMBEDDING_DIM = 768`
+> and variant = `gemini-embedding-001`, finalized empirically (ADR-013). Deployment provider
+> remains deferred to Phase 11.
 
 ### Exit Criteria Status
 
@@ -531,6 +537,184 @@ repeatable, explainable, debuggable.
 
 ---
 
+## Phase 2A Completion Report — Embedding Infrastructure
+
+> **Date:** 2026-06-11 · **Owner:** Lead Retrieval Engineer / AI Infrastructure (nickg) · **Scope:** embedding **generation + storage + operational monitoring** only. **No similarity search, no vector search, no retrieval, no RAG** — those are Phase 2B+.
+
+### Overview
+Phase 2A turns every `document_chunk` (Phase 1C) into a **vector embedding** and stores
+it in PostgreSQL via **pgvector**. Input: `document_chunks`. Output: the same rows, now
+carrying a validated `embedding vector(768)` plus operational tracking. The system can now
+answer **"does every chunk have a valid embedding?"** — but deliberately *not* "what are the
+most similar chunks?" (Phase 2B). This phase resolves the last deferred Phase 0 architecture
+item: the embedding model and dimension are now finalized and **empirically verified against
+the live model**, not assumed.
+
+### Features Implemented
+- **Swappable embedding provider layer** (`app/retrieval/embeddings/`) — an abstract
+  `EmbeddingProvider` with a concrete `GeminiEmbeddingProvider` (generate · retries ·
+  rate-limit handling · response validation · MRL re-normalization).
+- **Gemini integration** via the `google-genai` SDK (`gemini-embedding-001`), configured
+  entirely from `Settings`/env — **no hardcoded keys**, SDK lazy-imported.
+- **EmbeddingService** orchestrator — load chunks needing embeddings → batch-generate →
+  validate → store vector + mark `COMPLETED` → reconcile report status.
+- **Batch processing** (`batchEmbedContents`, ≤100 chunks/request) with documented
+  small/medium/large strategy and per-batch failure isolation.
+- **Persistence-layer validation** (`embedding_validator.py`): null / wrong-dimension /
+  empty / zero / duplicate-generation, all logged.
+- **Per-chunk status tracking** (`embedding_status`: PENDING/PROCESSING/COMPLETED/FAILED)
+  + report-level `EMBEDDING`/`EMBEDDED` lifecycle.
+- **Celery task** `generate_embeddings_task` (idempotent, bounded retry, failure handling,
+  progress logging).
+- **Observability** (`metrics.py`): generation time, chunks processed, failures, retry
+  counts, API calls, tokens, and a cost estimate.
+- **Three operational APIs**: `POST .../embeddings/generate`, `GET .../embeddings/status`,
+  `GET .../embeddings/stats`.
+
+### Architecture Changes
+- **New package** `app/retrieval/embeddings/` (`provider.py`, `gemini_provider.py`,
+  `embedding_service.py`, `batch_processor.py`, `embedding_validator.py`, `metrics.py`,
+  `exceptions.py`). *Why:* isolate embedding generation behind a stable interface so the
+  model is swappable without touching business logic (ADR-003/ADR-013).
+- **`document_chunks` extended** with `embedding vector(768)` + `embedding_status` +
+  `embedding_model` + `embedding_generated_at` (migration `0004_phase2a`). *Why:* embeddings
+  live on the chunk they describe; tracking columns give operational visibility.
+- **`ReportStatus` extended** with `EMBEDDING`/`EMBEDDED`; **new `EmbeddingStatus` enum**.
+- **New `/api/v1/reports/{id}/embeddings/*` router**; repository extended (sync writers for
+  the worker; async readers for stats/status).
+- **Pipeline boundary:** embedding is **NOT auto-chained** from `generate_chunks` — it is an
+  explicit operational action (`POST .../embeddings/generate`). *Why:* it calls a paid
+  external API; keeping it on-demand preserves a deterministic, offline-testable ingestion
+  pipeline and prevents unplanned spend.
+
+### Technical Decisions
+- **Decision:** Embedding model = **`gemini-embedding-001`**, dimension = **768**
+  (Matryoshka-truncated from the native 3072 and **L2-re-normalized**), task type
+  `RETRIEVAL_DOCUMENT`. **Verified live** before locking: a sample financial chunk returned
+  a 3072-dim unit vector by default; `output_dimensionality=768` returned a 768-dim vector
+  with norm ≈ 0.58 (hence the mandatory re-normalization). **Why 768, not 3072:** pgvector's
+  HNSW/IVFFlat indexes support **≤ 2000 dimensions** for the `vector` type — 768 lets Phase
+  2B build a standard HNSW index on a plain `vector(768)` with no `halfvec` workaround, at
+  4× less storage, while retaining strong MRL quality. (See **ADR-013**, **TDL-014**.)
+- **Decision:** Provider does retries/rate-limit/validation; service owns orchestration;
+  validator is a second, persistence-layer check. *Why:* defense in depth, each unit testable
+  in isolation without network.
+- **Decision:** Idempotent by default — only chunks lacking a stored vector are embedded;
+  `force=true` re-embeds all. *Why:* re-runs and partial-failure recovery never duplicate,
+  re-bill, or overwrite good vectors (task §13).
+- **Decision:** On-demand embedding (not auto-chained). *Why:* paid API + operational control.
+
+### Files Created
+- `app/retrieval/embeddings/__init__.py`, `provider.py`, `gemini_provider.py`,
+  `embedding_service.py`, `batch_processor.py`, `embedding_validator.py`, `metrics.py`,
+  `exceptions.py`
+- `app/schemas/embedding.py`
+- `app/api/v1/endpoints/embeddings.py`
+- `migrations/versions/20260611_0004_phase2a_embeddings.py`
+- `tests/unit/test_embedding_provider.py`, `test_embedding_service.py`,
+  `test_embedding_validator.py`, `test_batch_processor.py`, `test_embedding_status.py`
+- `tests/integration/test_embeddings_api.py`
+
+### Files Modified
+- `app/core/config.py` (model=`gemini-embedding-001`, `embedding_dim=768`, embedding tuning)
+- `app/models/enums.py` (`EMBEDDING`/`EMBEDDED`; new `EmbeddingStatus`)
+- `app/models/document_chunk.py` (embedding columns + status CHECK + status index)
+- `app/repositories/report_repository.py` (sync embedding writers; async stats/status readers)
+- `app/tasks/ingestion.py` (`generate_embeddings_task`)
+- `app/api/v1/router.py` (mount embeddings router)
+- `requirements.txt` (`google-genai`)
+- `.env.example` (finalized embedding settings)
+- `tests/integration/conftest.py` (enable `vector` ext for `create_all`; stub the new task)
+- **Migrations `0002`/`0003` (bug-fix):** corrected the `reports.status` CHECK
+  re-creation so the Alembic chain runs end-to-end (see Lessons Learned).
+
+### Database Changes
+- **`document_chunks` (+migration `0004_phase2a`):** new `embedding vector(768)` (NULLable),
+  `embedding_status varchar(16) NOT NULL DEFAULT 'PENDING'` (+CHECK), `embedding_model
+  varchar(64)`, `embedding_generated_at timestamptz`.
+- **Index:** btree `ix_document_chunks_embedding_status (report_id, embedding_status)` for
+  status sweeps. **No HNSW / IVFFlat / ANN index — deferred to Phase 2B.**
+- **Altered** `reports.status` CHECK to add `EMBEDDING`/`EMBEDDED`.
+- **Production-safe + reversible:** verified upgrade → downgrade-to-base → re-upgrade on a
+  clean pgvector database; `CREATE EXTENSION IF NOT EXISTS vector` makes it self-contained.
+
+### API Changes
+- `POST /api/v1/reports/{id}/embeddings/generate?force=` → 202, enqueues the run (or reports
+  "no chunks").
+- `GET /api/v1/reports/{id}/embeddings/status` → per-status counts + report status.
+- `GET /api/v1/reports/{id}/embeddings/stats` → `{total_chunks, embedded_chunks,
+  missing_chunks, dimension, model, fully_embedded}` (dimension = **768**, actual).
+- 404 (`NOT_FOUND`) for unknown reports via the standard envelope.
+
+### Testing Summary
+- **Unit (42 new; 109 total passing):** provider (normalize, dim/count validation, retry on
+  rate-limit, exhausted retries, non-retryable, error classification, config error); service
+  (happy path, idempotent skip, force re-embed, partial failure, validator-caught bad dim,
+  no-chunks); validator (null/empty/wrong-dim/zero/duplicate); batch processor (batch
+  planning small/medium/large, failure isolation); status enums.
+- **Integration (DB-backed, fake provider — no key/network):** chunk → embedding → pgvector
+  round-trip at width 768; status/stats endpoints; report→`EMBEDDED`; generate endpoint
+  enqueues; no-chunks no-op; 404s; partial-failure leaves report not-embedded; idempotent
+  re-run. Verified against a live `pgvector/pgvector:pg16` container.
+- All tests deterministic; no live Gemini call in the suite (the live call was used **once**,
+  manually, only to verify the dimension before locking the schema).
+- *Note:* on the local **Python 3.14** box, asyncpg + pytest-asyncio show a known
+  "Event loop is closed" **teardown** artifact when many async tests share a process (it hits
+  pre-existing tests identically); every test passes in isolation. The project targets
+  **3.11** (CI), where this does not occur.
+
+### Lessons Learned
+- **Verify the model, don't trust docs.** Calling `gemini-embedding-001` directly revealed
+  two schema-critical facts: native dim is **3072** (not 768), and **truncated MRL vectors
+  are returned un-normalized** — both would have caused silent similarity bugs in Phase 2B.
+- **Dimension is an indexing decision, not just a quality one.** pgvector's 2000-dim
+  ANN-index ceiling makes 768 the pragmatic choice now so Phase 2B isn't forced into
+  `halfvec`.
+- **Latent Alembic bug surfaced (and fixed):** `op.create_check_constraint("ck_reports_…")`
+  re-applies the `ck_%(table_name)s_%(constraint_name)s` naming convention, doubling the name
+  to `ck_reports_ck_reports_report_status`, while the paired `DROP … ck_reports_report_status`
+  targeted the un-doubled name — so the migration chain broke at `0003` the first time it was
+  ever run end-to-end (the suite uses `create_all`, which hid it). Fixed by passing **bare**
+  constraint names to `create_check_constraint`/`drop_constraint` in `0002`/`0003`/`0004`.
+
+### Risks Discovered
+- **Re-normalization dependency:** any future change to dimension/normalization must keep the
+  unit-norm invariant or Phase 2B similarity scores silently skew. Encoded in the provider +
+  validator and asserted in tests.
+- **Model/dimension change = full re-embed:** stored `embedding_model` + the `force` path make
+  re-embedding controlled, but it remains an O(corpus) operation (pre-existing risk, now real).
+- **External-API cost/limits:** embedding is paid + rate-limited; mitigated by batching,
+  retries with backoff, idempotency, and on-demand triggering — but a key is required to run.
+- **Heuristic token counts** (Phase 1C) drive the cost estimate; it is an estimate, not billing.
+
+### Future Phase Dependencies
+- **Phase 2B (vector search)** depends on this column: it will add the **HNSW index** on
+  `vector(768)`, plus `RETRIEVAL_QUERY` query embedding, similarity search, hybrid retrieval,
+  re-ranking (ADR-010), and the search APIs.
+- **Phases 3–5** retrieve embedded chunks as evidence for extraction/analysis.
+
+### Exit Criteria Verification
+| Criterion | Status |
+|---|---|
+| Gemini embedding model finalized | ✅ `gemini-embedding-001` (ADR-013) |
+| Embedding dimension finalized | ✅ **768** (verified live; MRL-truncated + renormalized) |
+| Database schema updated | ✅ `vector(768)` + status/model/timestamp (migration `0004`) |
+| Embeddings generated successfully | ✅ batched via Gemini; unit + integration |
+| Embeddings stored successfully | ✅ pgvector round-trip verified at width 768 |
+| Validation layer operational | ✅ provider-side + persistence-side, logged |
+| Status tracking operational | ✅ per-chunk + report lifecycle + status API |
+| Celery workflow operational | ✅ `generate_embeddings_task` (retry/failure/progress) |
+| APIs operational | ✅ generate / status / stats |
+| Tests pass | ✅ 109 unit; 6 embedding integration (isolation-verified) |
+| Documentation updated | ✅ this report + ADR-013 + TDL-014 |
+| No HNSW/IVF index created (deferred to 2B) | ✅ confirmed (0 ANN indexes) |
+
+### Final Status
+> **PHASE 2A COMPLETED.** Phase 2B (vector/similarity search, hybrid retrieval, re-ranking,
+> search APIs) **NOT started — strictly out of scope.**
+
+---
+
 ## 3. Technology Decisions Log
 
 > Template: **Decision · Alternatives Considered · Chosen Because · Tradeoffs · Expected Impact**
@@ -625,6 +809,20 @@ repeatable, explainable, debuggable.
 - **Chosen because:** deterministic and dependency-free for Phase 1C, while allowing a model-accurate tokenizer (e.g. tiktoken) to be swapped in for Phase 2 without touching the chunker
 - **Tradeoffs:** heuristic counts approximate real subword token counts
 - **Expected impact:** stable chunk sizing now; easy migration to exact token budgets later
+
+### TDL-014 — Gemini embedding client + model variant (Phase 2A)
+- **Decision:** Use the **`google-genai`** SDK against **`gemini-embedding-001`** to embed
+  chunks, requesting `output_dimensionality=768` (Matryoshka) with `task_type=RETRIEVAL_DOCUMENT`,
+  and **re-normalize** the truncated vectors. Abstracted behind an `EmbeddingProvider` interface.
+- **Alternatives:** raw REST/`httpx` to the embeddings endpoint; older `text-embedding-004`
+  (768 native, now superseded/absent for this key); native 3072 stored as `halfvec`; OpenAI/
+  Cohere/open-source (BGE/E5) embeddings.
+- **Chosen because:** GA model, best Gemini-stack fit (TDL-003/ADR-003), MRL lets one model
+  serve multiple dimensions, the SDK handles auth/transport, and 768 keeps the column ANN-index-
+  able in pgvector (≤ 2000 dims) for Phase 2B. The interface keeps the model swappable.
+- **Tradeoffs:** external paid dependency + rate limits; truncated output must be re-normalized;
+  a model/dimension change is a full re-embed. SDK is lazy-imported so the app/tests load without it.
+- **Expected impact:** reliable, batched, low-cost vector generation with a clean upgrade path.
 
 ---
 
@@ -734,6 +932,34 @@ repeatable, explainable, debuggable.
 - **Reasoning:** preserves paragraph/risk/statement boundaries and coherence; deterministic, repeatable, debuggable; fixed-size shreds tables and merges unrelated risks; semantic chunking requires embeddings (out of scope, and couples prep to a model).
 - **Consequences:** token-target heuristics need occasional tuning; per-chunk page precision is section-level for now. Aligns with ADR-007 (knowledge prep separate from RAG vectors) — the embedding column is added later in Phase 2.
 
+### ADR-013 — Finalize Gemini Embedding Model = `gemini-embedding-001` @ 768 dims  *(Accepted — Phase 2A)*
+- **Context:** Phase 0 deferred two items to Phase 2 (ADR-003): the **specific Gemini
+  embedding variant** and the **embedding dimension** (`EMBEDDING_DIM`), which fixes the
+  `vector(EMBEDDING_DIM)` column width. Phase 2A must resolve both — empirically, not from docs.
+- **Problem:** Choose the model and the stored vector width, balancing retrieval quality,
+  storage/cost, and **pgvector index constraints** for Phase 2B.
+- **Options:**
+  1. `gemini-embedding-001` at **native 3072** dims (store as `vector(3072)`).
+  2. `gemini-embedding-001` at **768** dims (MRL-truncated + re-normalized) — *chosen*.
+  3. `gemini-embedding-001` at 1536 dims.
+  4. Older `text-embedding-004` (768 native) or a non-Gemini provider.
+- **Verification (method):** before locking anything, called the live model with a sample
+  financial chunk: default output was **3072-dim, L2-normalized (norm = 1.0)**;
+  `output_dimensionality` of 768 / 1536 returned vectors of those widths but **un-normalized**
+  (norm ≈ 0.58 / 0.69). `batchEmbedContents` confirmed batch generation. These facts — not blog
+  posts — drove the decision and the migration.
+- **Decision:** **`gemini-embedding-001`, dimension 768**, Matryoshka-truncated and
+  **L2-re-normalized**, `task_type=RETRIEVAL_DOCUMENT` for stored chunks.
+- **Reasoning:** pgvector's HNSW/IVFFlat indexes support **≤ 2000 dims** for the `vector`
+  type; 768 lets Phase 2B build a standard ANN index on a plain `vector(768)` with **no
+  `halfvec` workaround**, at ~4× less storage than 3072, while MRL retains strong quality.
+  768 also matches the operational `stats.dimension` contract.
+- **Consequences:** truncated vectors **must** be re-normalized (enforced in the provider +
+  validator) or cosine/dot-product similarity skews; a future model/dimension change is a
+  full **re-embed** migration (mitigated by stored `embedding_model` + the `force` path).
+  The native-3072 option is revisitable in Phase 2B via `halfvec` if quality demands it.
+  **Resolves the Phase 0 deferred `EMBEDDING_DIM` and variant items.** (See TDL-014, TDL-003.)
+
 ---
 
 ## 5. Implementation Log
@@ -767,7 +993,14 @@ repeatable, explainable, debuggable.
 | — | 1C | `generate_chunks` task + APIs | nickg | Celery task (CHUNKING/CHUNKED) chained from `detect_sections`; chunks/chunk/chunk-map/chunk-stats endpoints | ✅ Completed |
 | — | 1C | Tests + docs | nickg | 24 new unit tests (67 total pass); integration suite; Phase 1C Completion Report + ADR-012/TDL-013 | ✅ Completed |
 | — | 1C | **Phase 1C COMPLETE** | nickg | All exit criteria met; Phase 2 not started | ✅ Completed |
-| — | 2 | Embeddings + pgvector | | Add `vector(EMBEDDING_DIM)` column + HNSW; embed chunk_text | ⬜ Todo |
+| 2026-06-11 | 2A | Embedding model finalized | nickg | Verified live: `gemini-embedding-001`, native 3072 → MRL-truncated **768** + re-normalized; ADR-013/TDL-014; resolves deferred `EMBEDDING_DIM` | ✅ Completed |
+| 2026-06-11 | 2A | `embedding vector(768)` + migration | nickg | `document_chunks` + embedding/status/model/timestamp cols; migration `0004_phase2a` (reversible, **no ANN index**); extended status enum | ✅ Completed |
+| 2026-06-11 | 2A | Embedding provider layer | nickg | `app/retrieval/embeddings/` — provider ABC, Gemini provider (retry/rate-limit/validate/normalize), service, batch processor, validator, metrics, exceptions | ✅ Completed |
+| 2026-06-11 | 2A | `generate_embeddings_task` + APIs | nickg | Celery task (EMBEDDING/EMBEDDED, idempotent, retry); generate/status/stats endpoints | ✅ Completed |
+| 2026-06-11 | 2A | Migration chain bug-fix | nickg | Fixed doubled `ck_reports_report_status` naming in `0002`/`0003`/`0004` so Alembic runs end-to-end (upgrade/downgrade verified) | ✅ Completed |
+| 2026-06-11 | 2A | Tests + docs | nickg | 42 new unit tests (109 total pass); 6 DB-backed embedding integration tests; Phase 2A Completion Report + ADR-013/TDL-014 | ✅ Completed |
+| 2026-06-11 | 2A | **Phase 2A COMPLETE** | nickg | All exit criteria met; Phase 2B (search) not started | ✅ Completed |
+| — | 2B | Vector/hybrid search | | HNSW index on `vector(768)`; query embedding; similarity + hybrid retrieval; re-rank; search APIs | ⬜ Todo |
 
 > _Add a row per meaningful change. Mark status: ⬜ Todo · 🟡 In progress · ✅ Completed · ⛔ Blocked._
 
@@ -813,6 +1046,8 @@ repeatable, explainable, debuggable.
 | Config (1B) | Externalizing the taxonomy to JSON kept detection tunable and tests data-driven (no code edits to add a section alias). | — |
 | ORM (1C) | `metadata` is reserved on SQLAlchemy's declarative base — mapped the JSONB via attribute `chunk_metadata` to DB column `metadata`. | — |
 | Chunking (1C) | Closing chunks at the *target* (not the max) and packing whole paragraphs keeps sizes consistent and coherent; per-section overrides prevent table-shredding/risk-merging. | — |
+| Embeddings (2A) | Verified the model live before locking the schema: `gemini-embedding-001` is **3072-dim** natively and **truncated MRL vectors come back un-normalized** — both would have silently broken Phase 2B similarity. Chose 768 to stay under pgvector's 2000-dim ANN-index ceiling. | 2026-06-11 |
+| Migrations (2A) | `op.create_check_constraint`/`drop_constraint` re-apply the `ck_%(table)s_%(name)s` convention, so passing an already-prefixed name doubles it (`ck_reports_ck_reports_report_status`); the chain broke at `0003` the first time it ran via Alembic (tests use `create_all`). Pass **bare** names. | 2026-06-11 |
 
 ---
 

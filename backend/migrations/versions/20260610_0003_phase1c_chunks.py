@@ -41,7 +41,7 @@ def upgrade() -> None:
     # ---- extend reports.status allowed values -------------------------------
     op.execute("ALTER TABLE reports DROP CONSTRAINT IF EXISTS ck_reports_report_status")
     op.create_check_constraint(
-        "ck_reports_report_status", "reports", _status_check(_NEW_STATUSES)
+        "report_status", "reports", _status_check(_NEW_STATUSES)
     )
 
     # ---- document_chunks ----------------------------------------------------
@@ -94,5 +94,5 @@ def downgrade() -> None:
 
     op.execute("ALTER TABLE reports DROP CONSTRAINT IF EXISTS ck_reports_report_status")
     op.create_check_constraint(
-        "ck_reports_report_status", "reports", _status_check(_PREV_STATUSES)
+        "report_status", "reports", _status_check(_PREV_STATUSES)
     )

@@ -69,9 +69,30 @@ class Settings(BaseSettings):
     # ---- LLM / Embeddings ----
     gemini_api_key: str = ""
     gemini_llm_model: str = "gemini-2.5-pro"
-    gemini_embedding_model: str = ""
-    # Deferred to Phase 2 — None until the embedding model is selected & tested.
-    embedding_dim: int | None = None
+    # Phase 2A: finalized. `gemini-embedding-001` (GA) returns 3072-dim vectors
+    # natively; we request a Matryoshka-truncated 768-dim output (then re-normalize)
+    # so the column stays within pgvector's 2000-dim HNSW/IVFFlat index limit for
+    # Phase 2B. See ADR-013 in docs/06_IMPLEMENTATION_ROADMAP.md.
+    gemini_embedding_model: str = "gemini-embedding-001"
+    embedding_dim: int = 768
+
+    # ---- Embedding generation (Phase 2A) ----
+    # Gemini embedding task type for stored document chunks (RETRIEVAL_DOCUMENT).
+    # The query-side task type (RETRIEVAL_QUERY) belongs to Phase 2B (search).
+    embedding_task_type: str = "RETRIEVAL_DOCUMENT"
+    # Re-normalize truncated (<3072) vectors to unit length — required because
+    # Gemini only L2-normalizes the full-width 3072 output.
+    embedding_normalize: bool = True
+    # Chunks per Gemini batchEmbedContents call (one HTTP request per batch).
+    embedding_batch_size: int = 100
+    # Retry policy for transient provider errors (rate limits / 5xx).
+    embedding_max_retries: int = 5
+    embedding_retry_base_delay: float = 2.0   # seconds; exponential backoff base
+    embedding_retry_max_delay: float = 60.0   # seconds; backoff ceiling
+    embedding_request_timeout: float = 60.0   # seconds per API call
+    # Cost estimation only (no billing) — USD per 1M input tokens for the model.
+    embedding_price_per_1m_tokens: float = 0.15
+
     openrouter_api_key: str = ""
     openrouter_fallback_model: str = "openai/gpt-4o"
 

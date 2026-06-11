@@ -12,7 +12,7 @@ All raw queries live here; services and tasks never write SQL directly
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.company import Company
 from app.models.document_chunk import DocumentChunk
-from app.models.enums import ReportStatus, ReportType
+from app.models.enums import EmbeddingStatus, ReportStatus, ReportType
 from app.models.report import Report
 from app.models.report_page import ReportPage
 from app.models.report_section import ReportSection
@@ -158,6 +158,43 @@ class ReportRepository:
     async def get_chunk(self, chunk_id: uuid.UUID) -> DocumentChunk | None:
         return await self.session.get(DocumentChunk, chunk_id)
 
+    # ---- Phase 2A: embedding status / stats (read-only, API layer) ----------
+
+    async def get_embedding_status_counts(self, report_id: uuid.UUID) -> dict[str, int]:
+        """Count chunks per `embedding_status` for a report (PENDING/.../FAILED)."""
+        rows = (
+            await self.session.execute(
+                select(DocumentChunk.embedding_status, func.count())
+                .where(DocumentChunk.report_id == report_id)
+                .group_by(DocumentChunk.embedding_status)
+            )
+        ).all()
+        return {str(status): int(count) for status, count in rows}
+
+    async def count_chunks_async(self, report_id: uuid.UUID) -> int:
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DocumentChunk)
+                .where(DocumentChunk.report_id == report_id)
+            )
+            or 0
+        )
+
+    async def count_embedded_async(self, report_id: uuid.UUID) -> int:
+        """Chunks with a non-null embedding (the authoritative 'embedded' count)."""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DocumentChunk)
+                .where(
+                    DocumentChunk.report_id == report_id,
+                    DocumentChunk.embedding.is_not(None),
+                )
+            )
+            or 0
+        )
+
 
 class SyncReportRepository:
     """Sync repository for the Celery worker's processing task."""
@@ -170,7 +207,7 @@ class SyncReportRepository:
 
     def mark_processing(self, report: Report) -> None:
         report.status = ReportStatus.PROCESSING
-        report.processing_started_at = datetime.now(timezone.utc)
+        report.processing_started_at = datetime.now(UTC)
         report.error_message = None
         self.session.commit()
 
@@ -189,13 +226,13 @@ class SyncReportRepository:
     def mark_processed(self, report: Report, *, total_pages: int) -> None:
         report.status = ReportStatus.PROCESSED
         report.total_pages = total_pages
-        report.processing_completed_at = datetime.now(timezone.utc)
+        report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
     def mark_failed(self, report: Report, *, message: str) -> None:
         report.status = ReportStatus.FAILED
         report.error_message = message[:2000]
-        report.processing_completed_at = datetime.now(timezone.utc)
+        report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
     # ---- Phase 1B: section detection ----------------------------------------
@@ -233,7 +270,7 @@ class SyncReportRepository:
 
     def mark_sectioned(self, report: Report) -> None:
         report.status = ReportStatus.SECTIONED
-        report.processing_completed_at = datetime.now(timezone.utc)
+        report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
     # ---- Phase 1C: chunk generation -----------------------------------------
@@ -273,5 +310,73 @@ class SyncReportRepository:
 
     def mark_chunked(self, report: Report) -> None:
         report.status = ReportStatus.CHUNKED
-        report.processing_completed_at = datetime.now(timezone.utc)
+        report.processing_completed_at = datetime.now(UTC)
+        self.session.commit()
+
+    # ---- Phase 2A: embedding generation -------------------------------------
+
+    def get_chunks_for_embedding(
+        self, report_id: uuid.UUID, *, include_completed: bool = False
+    ) -> list[DocumentChunk]:
+        """Chunks that still need an embedding (or all, when re-embedding).
+
+        Default: chunks without a stored vector (NULL embedding) — i.e. PENDING,
+        FAILED, or interrupted PROCESSING. This is what makes the run idempotent:
+        already-COMPLETED chunks are skipped. `include_completed=True` (force)
+        returns every chunk for a full re-embed.
+        """
+        query = self.session.query(DocumentChunk).filter(
+            DocumentChunk.report_id == report_id
+        )
+        if not include_completed:
+            query = query.filter(DocumentChunk.embedding.is_(None))
+        return list(query.order_by(DocumentChunk.chunk_index.asc()).all())
+
+    def count_chunks(self, report_id: uuid.UUID) -> int:
+        return int(
+            self.session.query(func.count(DocumentChunk.id))
+            .filter(DocumentChunk.report_id == report_id)
+            .scalar()
+            or 0
+        )
+
+    def count_missing_embeddings(self, report_id: uuid.UUID) -> int:
+        """Chunks still lacking a stored vector — 0 means the report is fully embedded."""
+        return int(
+            self.session.query(func.count(DocumentChunk.id))
+            .filter(
+                DocumentChunk.report_id == report_id,
+                DocumentChunk.embedding.is_(None),
+            )
+            .scalar()
+            or 0
+        )
+
+    def mark_embedding(self, report: Report) -> None:
+        report.status = ReportStatus.EMBEDDING
+        report.error_message = None
+        self.session.commit()
+
+    def mark_embedded(self, report: Report) -> None:
+        report.status = ReportStatus.EMBEDDED
+        report.processing_completed_at = datetime.now(UTC)
+        self.session.commit()
+
+    def set_embedding_status(
+        self, chunks: list[DocumentChunk], status: EmbeddingStatus
+    ) -> None:
+        """Set embedding_status on chunks in-memory (caller commits)."""
+        for chunk in chunks:
+            chunk.embedding_status = status.value
+
+    def apply_embedding(
+        self, chunk: DocumentChunk, *, embedding: list[float], model: str
+    ) -> None:
+        """Attach a validated vector to a chunk and mark it COMPLETED (no commit)."""
+        chunk.embedding = embedding
+        chunk.embedding_model = model
+        chunk.embedding_status = EmbeddingStatus.COMPLETED.value
+        chunk.embedding_generated_at = datetime.now(UTC)
+
+    def commit(self) -> None:
         self.session.commit()
