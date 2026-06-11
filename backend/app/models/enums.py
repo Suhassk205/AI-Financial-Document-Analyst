@@ -34,6 +34,8 @@ class ReportStatus(str, Enum):
     ANALYZED = "ANALYZED"        # financial analytics generated and stored (Phase 3C done)
     RISK_EXTRACTING = "RISK_EXTRACTING"  # worker is extracting risks (Phase 4)
     RISK_EXTRACTED = "RISK_EXTRACTED"    # risks extracted and stored (Phase 4 done)
+    TONE_EXTRACTING = "TONE_EXTRACTING"  # worker is extracting management tone (Phase 5)
+    TONE_EXTRACTED = "TONE_EXTRACTED"    # management tone extracted and stored (Phase 5 done)
     FAILED = "FAILED"            # a processing step failed (see error_message / logs)
 
 
@@ -133,4 +135,33 @@ class RiskEvolutionType(str, Enum):
     UNCHANGED_RISK = "UNCHANGED_RISK"
     ESCALATED_RISK = "ESCALATED_RISK"
     REDUCED_RISK = "REDUCED_RISK"
+
+
+class Sentiment(str, Enum):
+    """Sentiment classification for management tone (Phase 5)."""
+
+    POSITIVE = "POSITIVE"
+    NEUTRAL = "NEUTRAL"
+    NEGATIVE = "NEGATIVE"
+
+
+class ConfidenceLevel(str, Enum):
+    """Confidence level classification for management tone (Phase 5)."""
+
+    VERY_CONFIDENT = "VERY_CONFIDENT"
+    CONFIDENT = "CONFIDENT"
+    CAUTIOUS = "CAUTIOUS"
+    VERY_CAUTIOUS = "VERY_CAUTIOUS"
+
+
+class ToneEvolutionType(str, Enum):
+    """Tone evolution classification for period-over-period changes (Phase 5)."""
+
+    MORE_POSITIVE = "MORE_POSITIVE"
+    MORE_NEGATIVE = "MORE_NEGATIVE"
+    MORE_CONFIDENT = "MORE_CONFIDENT"
+    LESS_CONFIDENT = "LESS_CONFIDENT"
+    MORE_CAUTIOUS = "MORE_CAUTIOUS"
+    LESS_CAUTIOUS = "LESS_CAUTIOUS"
+    UNCHANGED = "UNCHANGED"
 

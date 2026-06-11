@@ -31,6 +31,9 @@ from app.retrieval.embeddings import (
 from app.risk.extraction.extraction_models import RiskChunkInput
 from app.risk.extraction.hybrid_extractor import HybridRiskExtractor
 from app.risk.evolution.evolution_service import RiskEvolutionService
+from app.tone.analysis.hybrid_analyzer import HybridToneAnalyzer
+from app.tone.analysis.models import ToneChunkInput
+from app.tone.evolution.evolution_service import ToneEvolutionService
 from app.tasks.celery_app import celery_app
 
 # Canonical sections that carry financial metrics (candidate set for extraction).
@@ -42,6 +45,12 @@ METRIC_CANDIDATE_SECTIONS = (
 # Canonical sections that carry risk disclosures.
 RISK_CANDIDATE_SECTIONS = (
     "Risk Factors", "MD&A", "Forward Guidance", "Forward-Looking Statements",
+)
+
+# Canonical sections that carry management tone.
+TONE_CANDIDATE_SECTIONS = (
+    "Management Commentary", "CEO Commentary", "CFO Commentary", "Prepared Remarks",
+    "Question & Answer", "Forward Guidance", "MD&A", "Shareholder Letters",
 )
 
 log = get_logger(__name__)
@@ -700,4 +709,138 @@ def generate_risk_evolution_task(self, report_id: str) -> dict:
             if failed is not None:
                 repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.extraction.extract_management_tone_task",
+    acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def extract_management_tone_task(self, report_id: str) -> dict:
+    """Extract management tone and generate PoP evolution records (Phase 5).
+
+    Workflow: load report → TONE_EXTRACTING → load chunks for TONE_CANDIDATE_SECTIONS →
+    run HybridToneAnalyzer → save tone records → load prior report tone →
+    run ToneEvolutionService → save evolution → TONE_EXTRACTED.
+    """
+    rid = uuid.UUID(report_id)
+    log.info("tone_extraction.task_start", report_id=report_id)
+
+    with SyncSessionLocal() as session:
+        repo = SyncReportRepository(session)
+        report = repo.get_report(rid)
+        if report is None:
+            log.warning("tone_extraction.report_missing", report_id=report_id)
+            return {"report_id": report_id, "status": "MISSING"}
+
+        try:
+            repo.mark_tone_extracting(report)
+
+            if report.company_id is None:
+                repo.replace_tone_records(rid, [])
+                repo.replace_tone_evolution(uuid.UUID("00000000-0000-0000-0000-000000000000"), rid, None, [])
+                repo.mark_tone_extracted(report)
+                log.info("tone_extraction.no_company", report_id=report_id)
+                return {"report_id": report_id, "status": "TONE_EXTRACTED", "tones": 0, "evolutions": 0}
+
+            # 1. Load candidate chunks for tone extraction
+            chunks = repo.get_extraction_chunks(rid, TONE_CANDIDATE_SECTIONS)
+            inputs = []
+            for ch in chunks:
+                normalized_section_name = None
+                if ch.chunk_metadata and isinstance(ch.chunk_metadata, dict):
+                    normalized_section_name = ch.chunk_metadata.get("normalized_section_name")
+                inputs.append(
+                    ToneChunkInput(
+                        chunk_id=str(ch.id),
+                        text=ch.chunk_text,
+                        normalized_section_name=normalized_section_name,
+                        fiscal_year=report.year,
+                        fiscal_quarter=report.quarter,
+                    )
+                )
+
+            # 2. Extract tone
+            result = HybridToneAnalyzer().analyze(report.company_id, inputs)
+
+            # 3. Store tone records
+            tone_rows = [
+                {
+                    "company_id": r.company_id,
+                    "source_chunk_id": r.source_chunk_id,
+                    "source_type": r.source_type,
+                    "sentiment": r.sentiment.value,
+                    "confidence_level": r.confidence_level.value,
+                    "hedging_score": r.hedging_score,
+                    "positive_score": r.positive_score,
+                    "negative_score": r.negative_score,
+                    "confidence_score": r.confidence_score,
+                    "extraction_method": r.extraction_method,
+                    "source_text": r.source_text,
+                }
+                for r in result.tone_records
+            ]
+            tones_count = repo.replace_tone_records(rid, tone_rows)
+
+            # 4. Fetch prior period's tone records for evolution
+            prior_report = repo.get_prior_report(report)
+            prior_report_id = prior_report.id if prior_report else None
+
+            # Need to reload saved current records to have IDs assigned
+            current_saved = repo.get_report_tone(rid)
+            prior_saved = repo.get_report_tone(prior_report_id) if prior_report_id else []
+
+            # 5. Generate PoP evolution
+            evolutions = ToneEvolutionService().generate_evolution(
+                report.company_id,
+                current_saved,
+                prior_saved,
+            )
+
+            # 6. Store evolution records
+            evolution_rows = [
+                {
+                    "current_tone_id": e.current_tone_id,
+                    "previous_tone_id": e.previous_tone_id,
+                    "evolution_type": e.evolution_type.value,
+                    "confidence_score": e.confidence_score,
+                    "explanation": e.explanation,
+                }
+                for e in evolutions
+            ]
+
+            ev_count = repo.replace_tone_evolution(
+                report.company_id,
+                rid,
+                prior_report_id,
+                evolution_rows,
+            )
+
+            repo.mark_tone_extracted(report)
+
+            log.info(
+                "tone_extraction.task_success",
+                report_id=report_id,
+                tones=tones_count,
+                evolutions=ev_count,
+                **result.stats.as_dict(),
+            )
+            return {
+                "report_id": report_id,
+                "status": "TONE_EXTRACTED",
+                "tones": tones_count,
+                "evolutions": ev_count,
+                **result.stats.as_dict(),
+            }
+
+        except Exception as exc:  # noqa: BLE001
+            log.error("tone_extraction.task_failure", report_id=report_id, error=str(exc))
+            session.rollback()
+            failed = repo.get_report(rid)
+            if failed is not None:
+                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
+
 

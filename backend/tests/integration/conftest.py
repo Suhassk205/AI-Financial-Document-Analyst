@@ -95,6 +95,8 @@ async def api_client(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[AsyncCli
     )
     # Phase 4: the risks endpoint enqueues extract_risks_task.delay().
     monkeypatch.setattr("app.api.v1.endpoints.risks.extract_risks_task", _Task())
+    # Phase 5: the tone endpoint enqueues extract_management_tone_task.delay().
+    monkeypatch.setattr("app.api.v1.endpoints.tone.extract_management_tone_task", _Task())
 
     async with LifespanManager(app):
         transport = ASGITransport(app=app)

@@ -29,6 +29,8 @@ from app.models.report_page import ReportPage
 from app.models.report_section import ReportSection
 from app.models.risk_factor import RiskFactor
 from app.models.risk_evolution import RiskEvolution
+from app.models.management_tone import ManagementTone
+from app.models.tone_evolution import ToneEvolution
 
 
 class ReportRepository:
@@ -386,6 +388,26 @@ class ReportRepository:
         if evolution_type is not None:
             stmt = stmt.where(RiskEvolution.evolution_type == evolution_type)
         stmt = stmt.order_by(RiskEvolution.created_at.asc())
+        return list((await self.session.scalars(stmt)).all())
+
+    async def get_tone_by_report(self, report_id: uuid.UUID) -> list[ManagementTone]:
+        stmt = select(ManagementTone).where(ManagementTone.report_id == report_id).order_by(ManagementTone.source_type.asc())
+        return list((await self.session.scalars(stmt)).all())
+
+    async def get_tone_by_id(self, tone_id: uuid.UUID) -> ManagementTone | None:
+        return await self.session.get(ManagementTone, tone_id)
+
+    async def get_tone_by_company(self, company_id: uuid.UUID) -> list[ManagementTone]:
+        stmt = (
+            select(ManagementTone)
+            .join(Report, ManagementTone.report_id == Report.id)
+            .where(Report.company_id == company_id)
+            .order_by(Report.year.asc(), Report.quarter.asc(), ManagementTone.source_type.asc())
+        )
+        return list((await self.session.scalars(stmt)).all())
+
+    async def get_tone_evolutions_by_company(self, company_id: uuid.UUID) -> list[ToneEvolution]:
+        stmt = select(ToneEvolution).where(ToneEvolution.company_id == company_id).order_by(ToneEvolution.created_at.asc())
         return list((await self.session.scalars(stmt)).all())
 
 
@@ -786,5 +808,81 @@ class SyncReportRepository:
             ).delete(synchronize_session=False)
 
         self.session.add_all([RiskEvolution(company_id=company_id, **r) for r in rows])
+        self.session.commit()
+        return len(rows)
+
+    def replace_tone_records(self, report_id: uuid.UUID, tones: list[dict]) -> int:
+        """Delete existing tone records for the report and insert the new set.
+
+        Idempotent.
+        """
+        self.session.query(ManagementTone).filter(
+            ManagementTone.report_id == report_id
+        ).delete()
+        self.session.add_all(
+            [ManagementTone(report_id=report_id, **t) for t in tones]
+        )
+        self.session.commit()
+        return len(tones)
+
+    def mark_tone_extracting(self, report: Report) -> None:
+        report.status = ReportStatus.TONE_EXTRACTING
+        report.error_message = None
+        self.session.commit()
+
+    def mark_tone_extracted(self, report: Report) -> None:
+        report.status = ReportStatus.TONE_EXTRACTED
+        report.processing_completed_at = datetime.now(UTC)
+        self.session.commit()
+
+    def get_report_tone(self, report_id: uuid.UUID) -> list[ManagementTone]:
+        return list(
+            self.session.query(ManagementTone)
+            .filter(ManagementTone.report_id == report_id)
+            .all()
+        )
+
+    def get_company_tone(self, company_id: uuid.UUID) -> list[ManagementTone]:
+        return list(
+            self.session.query(ManagementTone)
+            .join(Report, ManagementTone.report_id == Report.id)
+            .filter(Report.company_id == company_id)
+            .all()
+        )
+
+    def replace_tone_evolution(
+        self,
+        company_id: uuid.UUID,
+        report_id: uuid.UUID,
+        prior_report_id: uuid.UUID | None,
+        rows: list[dict],
+    ) -> int:
+        """Rebuild tone evolution records for this period comparison (idempotent)."""
+        current_ids = select(ManagementTone.id).where(ManagementTone.report_id == report_id)
+        if prior_report_id:
+            prior_ids = select(ManagementTone.id).where(ManagementTone.report_id == prior_report_id)
+            self.session.query(ToneEvolution).filter(
+                ToneEvolution.company_id == company_id,
+                or_(
+                    ToneEvolution.current_tone_id.in_(current_ids),
+                    or_(
+                        ToneEvolution.previous_tone_id.in_(current_ids),
+                        and_(
+                            ToneEvolution.previous_tone_id.in_(prior_ids),
+                            ToneEvolution.current_tone_id.is_(None)
+                        )
+                    )
+                )
+            ).delete(synchronize_session=False)
+        else:
+            self.session.query(ToneEvolution).filter(
+                ToneEvolution.company_id == company_id,
+                or_(
+                    ToneEvolution.current_tone_id.in_(current_ids),
+                    ToneEvolution.previous_tone_id.in_(current_ids),
+                )
+            ).delete(synchronize_session=False)
+
+        self.session.add_all([ToneEvolution(company_id=company_id, **r) for r in rows])
         self.session.commit()
         return len(rows)

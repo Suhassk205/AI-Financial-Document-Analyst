@@ -1502,7 +1502,36 @@ Phase 4 implements the Risk Intelligence Engine. It processes normalized documen
 | Evaluation framework operational | ✅ Gold dataset evaluations and unit tests passing |
 
 ### Final Status
-> **PHASE 4 COMPLETED.** Phase 5 / Tone Analysis **NOT started — strictly out of scope.**
+> **PHASE 4 COMPLETED.**
+
+---
+
+## Phase 5 — Management Tone Intelligence Engine
+
+> **Scope:** extract structured tone/sentiment metrics from filings (prepared remarks & Q&A sections), perform period-over-period tone evolution, store in PostgreSQL, and expose tone APIs.
+
+### What was built
+- **Database Tables**: Added `management_tones` and `tone_evolutions` tables with clean relationships and constraints.
+- **Rule + LLM Engine**: Implemented `HybridToneAnalyzer` integrating phrase-based keyword counters for Sentiment, Confidence, and Hedging with a Gemini-based LLM verification step.
+- **Tone Evolution Engine**: Created `ToneMatcher`, `ToneEvolutionClassifier`, and `ToneEvolutionService` to sequentially match reporting periods by section type and classify change categories (`MORE_POSITIVE`, `MORE_NEGATIVE`, `MORE_CONFIDENT`, `MORE_CAUTIOUS`, `UNCHANGED`).
+- **Celery Tasks**: Configured an idempotent Celery task `extract_management_tone_task` executing synchronously in integration tests and async via enqueues.
+- **FastAPI Endpoints**: Developed RESTful endpoints for retrieving report tone records, individual tone details, company tone records, company tone evolution, and summarized tone statistics by section type.
+- **Evaluation Frameworks**: Standardized gold-dataset evaluation runners measuring classification precision/recall and hedging deviation rates offline.
+
+### Exit Criteria Verification
+| Criterion | Status | Evidence |
+|---|---|---|
+| `management_tones` and `tone_evolutions` tables implemented | ✅ | Migration `20260611_0010_phase5_management_tone` |
+| Rule + LLM extraction engine | ✅ | `HybridToneAnalyzer` with Sentiment, Confidence, and Hedging scoring |
+| Tone evolution tracking | ✅ | Matches and classifies PoP changes sequentially by section type |
+| Idempotent Celery task | ✅ | `extract_management_tone_task` fully integrated and tested |
+| APIs operational | ✅ | GET `/reports/.../tone`, GET `/companies/.../tone`, GET `/companies/.../tone-evolution`, and GET `/companies/.../tone-summary` |
+| Evaluation framework operational | ✅ | Analysis and evolution gold datasets/evaluation runners verified by tests |
+
+### Final Status
+> **PHASE 5 COMPLETED.** All core functional layers, DB migrations, Celery tasks, API routes, and unit/integration tests successfully verified.
+
+---
 
 ---
 

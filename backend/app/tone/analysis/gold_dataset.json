@@ -1,0 +1,40 @@
+{
+  "examples": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "text": "Our company delivered exceptional performance. We expect continued growth.",
+      "section": "Management Commentary",
+      "fiscal_year": 2026,
+      "expected": {
+        "sentiment": "POSITIVE",
+        "confidence_level": "VERY_CONFIDENT",
+        "min_hedging_score": 0.0,
+        "max_hedging_score": 0.1
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "text": "We face significant headwinds. The volatile market may disrupt our operations.",
+      "section": "Forward Guidance",
+      "fiscal_year": 2026,
+      "expected": {
+        "sentiment": "NEGATIVE",
+        "confidence_level": "VERY_CAUTIOUS",
+        "min_hedging_score": 0.5,
+        "max_hedging_score": 1.0
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "text": "The quarter was stable. We are on track to meet our guidance.",
+      "section": "MD&A",
+      "fiscal_year": 2026,
+      "expected": {
+        "sentiment": "NEUTRAL",
+        "confidence_level": "VERY_CONFIDENT",
+        "min_hedging_score": 0.0,
+        "max_hedging_score": 0.1
+      }
+    }
+  ]
+}

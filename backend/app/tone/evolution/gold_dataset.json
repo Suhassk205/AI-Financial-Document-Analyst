@@ -1,0 +1,82 @@
+{
+  "examples": [
+    {
+      "id": "ex_ev_1",
+      "company_id": "8bb50e2d-dc99-43ef-b387-052637738f61",
+      "prior": [
+        {
+          "id": "prior_t1",
+          "source_type": "MD&A",
+          "sentiment": "NEGATIVE",
+          "confidence_level": "CAUTIOUS",
+          "hedging_score": 0.6,
+          "positive_score": 0.1,
+          "negative_score": 0.7,
+          "confidence_score": 0.8,
+          "extraction_method": "RULE",
+          "source_text": "Prior text."
+        }
+      ],
+      "current": [
+        {
+          "id": "curr_t1",
+          "source_type": "MD&A",
+          "sentiment": "POSITIVE",
+          "confidence_level": "CONFIDENT",
+          "hedging_score": 0.2,
+          "positive_score": 0.8,
+          "negative_score": 0.1,
+          "confidence_score": 0.9,
+          "extraction_method": "RULE",
+          "source_text": "Current text."
+        }
+      ],
+      "expected": [
+        {
+          "previous_tone_id": "prior_t1",
+          "current_tone_id": "curr_t1",
+          "evolution_type": "MORE_POSITIVE"
+        }
+      ]
+    },
+    {
+      "id": "ex_ev_2",
+      "company_id": "8bb50e2d-dc99-43ef-b387-052637738f61",
+      "prior": [
+        {
+          "id": "prior_t2",
+          "source_type": "Forward Guidance",
+          "sentiment": "POSITIVE",
+          "confidence_level": "VERY_CONFIDENT",
+          "hedging_score": 0.1,
+          "positive_score": 0.9,
+          "negative_score": 0.0,
+          "confidence_score": 0.95,
+          "extraction_method": "RULE",
+          "source_text": "Prior guidance."
+        }
+      ],
+      "current": [
+        {
+          "id": "curr_t2",
+          "source_type": "Forward Guidance",
+          "sentiment": "NEGATIVE",
+          "confidence_level": "CAUTIOUS",
+          "hedging_score": 0.7,
+          "positive_score": 0.1,
+          "negative_score": 0.8,
+          "confidence_score": 0.85,
+          "extraction_method": "RULE",
+          "source_text": "Current guidance."
+        }
+      ],
+      "expected": [
+        {
+          "previous_tone_id": "prior_t2",
+          "current_tone_id": "curr_t2",
+          "evolution_type": "MORE_NEGATIVE"
+        }
+      ]
+    }
+  ]
+}
