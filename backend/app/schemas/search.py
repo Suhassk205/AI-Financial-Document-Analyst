@@ -57,3 +57,72 @@ class SearchDebugResponse(BaseModel):
     query_embedding: QueryEmbeddingStatsOut
     timings: SearchTimingsOut
     results: list[SearchResultOut]
+
+
+# ---- Phase 2C: hybrid retrieval ----------------------------------------------
+
+
+class HybridFilters(BaseModel):
+    """All-optional structured constraints. Invalid UUIDs are rejected by Pydantic."""
+
+    company_id: uuid.UUID | None = None
+    report_id: uuid.UUID | None = None
+    year: int | None = None
+    quarter: int | None = None
+    report_type: str | None = None
+    section_name: str | None = None
+    normalized_section_name: str | None = None
+
+
+class HybridSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="Natural-language search query")
+    top_k: int | None = Field(
+        None, ge=5, le=50, description="Results to return (5–50; default from profile)"
+    )
+    profile: str | None = Field(None, description="Retrieval profile (default GENERAL)")
+    filters: HybridFilters = Field(default_factory=HybridFilters)
+
+
+class HybridTimingsOut(BaseModel):
+    embedding_ms: float
+    filter_ms: float
+    vector_search_ms: float
+    total_ms: float
+
+
+class HybridSearchResponse(BaseModel):
+    query: str
+    profile: str
+    top_k: int
+    count: int
+    candidate_count: int
+    applied_filters: dict
+    timings: HybridTimingsOut
+    results: list[SearchResultOut]
+
+
+class HybridDebugResponse(BaseModel):
+    """Hybrid diagnostics: applied filters → candidate count → params → chunks → scores."""
+
+    query: str
+    profile: str
+    top_k: int
+    count: int
+    candidate_count: int
+    applied_filters: dict
+    search_parameters: dict
+    query_embedding: QueryEmbeddingStatsOut
+    timings: HybridTimingsOut
+    results: list[SearchResultOut]
+
+
+class RetrievalProfileOut(BaseModel):
+    name: str
+    description: str
+    preferred_sections: list[str]
+    default_top_k: int
+    max_candidates: int
+
+
+class RetrievalProfilesResponse(BaseModel):
+    profiles: list[RetrievalProfileOut]

@@ -20,6 +20,7 @@
    - ⭐ [Phase 1C Completion Report — Knowledge Preparation Layer](#phase-1c-completion-report--knowledge-preparation-layer)
    - ⭐ [Phase 2A Completion Report — Embedding Infrastructure](#phase-2a-completion-report--embedding-infrastructure)
    - ⭐ [Phase 2B Completion Report — Vector Search Foundation](#phase-2b-completion-report--vector-search-foundation)
+   - ⭐ [Phase 2C Completion Report — Hybrid Retrieval Foundation](#phase-2c-completion-report--hybrid-retrieval-foundation)
 3. [Technology Decisions Log](#3-technology-decisions-log)
 4. [Architecture Decision Records (ADR)](#4-architecture-decision-records-adr)
 5. [Implementation Log](#5-implementation-log)
@@ -64,7 +65,8 @@ Financial analysis is document-heavy, repetitive, and error-prone. Generic LLM c
 | **1C** | **Knowledge Preparation** ✅ | Section-aware recursive chunking | `document_chunks` (+metadata, no vectors), chunking engine, token counter, validation, chunk APIs | Validated chunks + metadata stored for 10-K/10-Q/transcript (DONE) |
 | **2A** | **Embedding Infrastructure** ✅ | Embed + store (no search) | `gemini-embedding-001`→`vector(768)`, provider layer, embedding APIs/status; **no ANN index** | Every chunk has a valid stored embedding (DONE) |
 | **2B** | **Vector Search Foundation** ✅ | Index + retrieve (vector-only) | HNSW (cosine) on `vector(768)`, query embedding, top-K KNN, `/search/vector`+`/search/debug` | Top-K semantically relevant chunks returned with scores (DONE) |
-| **2C** | **Advanced Retrieval** | Filter + hybrid + rerank | Metadata filter, hybrid (vector+keyword), query rewrite/HyDE, BGE re-rank | Higher-precision cited retrieval |
+| **2C** | **Hybrid Retrieval Foundation** ✅ | Metadata filter + vector | Filter→candidate→vector search, retrieval profiles, `/search/hybrid` | Scoped retrieval beats vector-only (DONE) |
+| **2D** | **Advanced Retrieval** | Rewrite + rerank | Query rewrite/HyDE, BGE re-rank, groundedness | Higher-precision cited retrieval |
 | **3** | **Financial Metric Extraction** | Typed KPIs + deltas | Metric Extraction Agent, `financial_metrics`, YoY/QoQ, `/metrics` | ≥95% extraction accuracy on gold set |
 | **4** | **Risk Intelligence** | Risks + evolution | Risk Analysis Agent, `risk_factors`, diff engine, `/risks` | Correct NEW/REMOVED/MODIFIED labeling |
 | **5** | **Management Tone Analysis** | Sentiment/confidence | Tone Agent, `tone_analysis`, rubric scoring, trends | Stable, rubric-anchored scores with citations |
@@ -881,6 +883,174 @@ were used — a near-orthogonal **worst case** for ANN recall; real clustered em
 
 ---
 
+## Phase 2C Completion Report — Hybrid Retrieval Foundation
+
+> **Date:** 2026-06-11 · **Owner:** Lead Retrieval Engineer / Financial Search Engineer (nickg) · **Scope:** **metadata filtering + vector search** (= hybrid). **No query rewriting, HyDE, re-ranking, LLM judge, RAG, or generation.**
+
+### Overview
+Phase 2C makes retrieval **context-aware**: it combines structured metadata constraints
+(company, period, section, …) with semantic vector search, in the order **filter → candidate
+set → vector search → ranked results**. A query like *"supply chain risks"* can now be scoped
+to *Company = Tesla, Year = 2024, Section = Risk Factors* so search runs over only the relevant
+content instead of the entire corpus. The output is unchanged from Phase 2B — relevant chunks +
+metadata + scores — just scoped. No reasoning, no generation.
+
+### Features Implemented
+- **Hybrid retrieval layer** (`app/retrieval/hybrid/`): filter builder, retrieval context,
+  profiles, exceptions, and the `HybridRetrievalService`.
+- **Filterable metadata** (all optional): `company_id`, `report_id`, `year`, `quarter`,
+  `report_type`, `section_name`, `normalized_section_name`.
+- **`RetrievalContext`** — the reusable constraint object future phases pass around.
+- **Filter-before-search** — metadata predicates constrain the candidate set in the **same**
+  SQL as the cosine `ORDER BY ... LIMIT`; the corpus is never vector-searched first.
+- **Retrieval profiles** — `GENERAL`, `RISK_ANALYSIS`, `MANAGEMENT_TONE`,
+  `FINANCIAL_STATEMENTS`, `GUIDANCE` (preferred canonical sections + default top_k + candidate
+  guardrail); a profile *prefers* sections only when the caller didn't pin one.
+- **Validation** — out-of-range year/quarter, unknown report_type, unknown section (vs
+  taxonomy), self-conflict (quarter on a 10-K), DB-backed existence (company/report) and
+  cross-row consistency (report_id vs company/year/quarter/report_type), with meaningful errors.
+- **APIs** — `POST /search/hybrid`, `POST /search/hybrid/debug`, `GET /search/profiles`.
+- **Observability** — candidate count + embedding/filter/vector-search/total latency, logged.
+
+### Architecture Changes
+- **New package** `app/retrieval/hybrid/`: `hybrid_retriever.py` (service + filtered KNN),
+  `metadata_filters.py` (RetrievalContext → SQLAlchemy conditions), `query_context.py`
+  (`RetrievalContext` + pure validation), `retrieval_profiles.py`, `retrieval_exceptions.py`.
+  *Why:* keep hybrid concerns isolated and composable; reuse Phase 2B `QueryEmbedder` +
+  `SearchResult` (no duplication).
+- **Filter sources:** report-level facts (company/year/quarter/report_type) via a **join to
+  `reports`** (typed, btree-indexed columns); `report_id` direct on `document_chunks`; section
+  filters via the per-chunk **JSONB `metadata` `@>` containment** (uses the existing GIN index).
+  *Why:* exact typed comparisons for IDs/years; index-backed section matching without a second join.
+- **Two-step execution** (candidate count, then ranked search) — surfaces `candidate_count` for
+  observability and cleanly demonstrates "filter → candidates → rank".
+- **New endpoints on the existing `/search` router**; new `SearchError` subclasses.
+
+### Technical Decisions
+- **Decision:** **Filter inside the ranking SQL** (single statement: `WHERE <filters> ORDER BY
+  embedding <=> q LIMIT k`), not post-filtering ANN output. **Why:** correctness and the phase
+  mandate — for selective filters Postgres scans the small filtered set exactly (recall 1.0
+  within scope); it never ANN-scans the whole corpus then drops rows (which can under-return).
+  (See **ADR-015**.)
+- **Decision:** Report-level filters via join to `reports`; section filters via JSONB `@>`.
+  **Why:** typed/indexed columns for IDs/years; GIN-backed containment for sections; avoids
+  trusting denormalized copies for the high-cardinality keys.
+- **Decision:** Profiles only *prefer* sections (applied when no explicit section). **Why:**
+  prepare future task-specific agents without overriding an explicit user filter. (**TDL-016**.)
+- **Decision:** Rich, layered validation (pure → DB). **Why:** fast 422s for bad input; 404 for
+  missing company/report; 422 for contradictory filters — "meaningful errors" per the mandate.
+
+### Files Created
+- `app/retrieval/hybrid/__init__.py`, `hybrid_retriever.py`, `metadata_filters.py`,
+  `query_context.py`, `retrieval_profiles.py`, `retrieval_exceptions.py`
+- `tests/unit/test_query_context.py`, `test_metadata_filters.py`, `test_retrieval_profiles.py`,
+  `test_hybrid_service.py`
+- `tests/integration/test_hybrid_search_api.py`
+
+### Files Modified
+- `app/schemas/search.py` (hybrid request/response/debug + profile schemas)
+- `app/api/v1/endpoints/search.py` (`/hybrid`, `/hybrid/debug`, `/profiles` + service dependency)
+- (no migration — Phase 2C reuses the 2A/2B schema; the GIN + HNSW indexes already exist)
+
+### Database Changes
+- **None.** Phase 2C is read-only over the existing schema: it leverages the **GIN** index on
+  `document_chunks.metadata` (Phase 1C) for section containment, the **btree** indexes on
+  `reports` (company/status/uploaded_at) for report-level filters, and the **HNSW** index
+  (Phase 2B) for ranking. No new tables, columns, or indexes.
+
+### API Changes
+- `POST /api/v1/search/hybrid` — `{query, top_k?, profile?, filters{…}}` → `{query, profile,
+  top_k, count, candidate_count, applied_filters, timings, results[]}`.
+- `POST /api/v1/search/hybrid/debug` — adds `search_parameters` (distance metric, ef_search,
+  preferred sections, max_candidates) + `query_embedding` stats.
+- `GET /api/v1/search/profiles` — lists profiles (name, description, preferred sections,
+  default top_k, max candidates).
+- Errors: `INVALID_FILTER`/`UNKNOWN_SECTION`/`CONFLICTING_FILTERS`/`UNKNOWN_PROFILE` → 422;
+  `FILTER_TARGET_NOT_FOUND` → 404.
+
+### Testing Summary
+- **Unit (34 new; 156 total passing):** context validation (ranges/enum/taxonomy/self-conflict,
+  applied/has_filters); filter builder (empty, report_id no-join, report-level join, section via
+  metadata, preferred-vs-explicit, multi-filter); profiles (registry, default, unknown,
+  canonical sections, params); hybrid service (profile/top_k resolution, validation order,
+  filter-plan assembly, outcome) with stubbed DB.
+- **Integration (DB-backed, deterministic hashing embedder):** profiles endpoint; no/single/
+  multiple filters; **hybrid-vs-vector-only quality**; conflicting filters → 422; invalid
+  report_id → 404; unknown section → 422; empty result set; debug diagnostics; profile section
+  scoping. Verified against live `pgvector/pgvector:pg16`.
+- Same Python-3.14 asyncpg/pytest-asyncio teardown artifact as 2A/2B (per-test isolation passes;
+  3.11/CI unaffected).
+
+### Performance Findings (task §13)
+Query-execution latency (ms) and candidate reduction, vector-only vs hybrid (filter =
+company + Risk Factors section, ~10% selective), HNSW present, ef_search=40:
+
+| N (chunks) | vec avg | vec p95 | hybrid avg | hybrid p95 | candidates | reduction |
+|---|---|---|---|---|---|---|
+| 100 | 2.49 | 3.84 | 1.88 | 3.10 | 10 | 10× |
+| 1000 | 2.67 | 3.18 | 2.44 | 3.14 | 100 | 10× |
+| 10000 | 4.14 | 5.04 | 10.75 | 12.52 | 1000 | 10× |
+
+- **Candidate reduction:** consistent **10×** — hybrid searches only relevant content.
+- **Latency:** hybrid is **faster/comparable at 100–1000**. At 10k a *low-selectivity (10%)*
+  filter yields 1000 candidates, and Postgres runs a **filtered exact scan** (~10.8 ms) instead
+  of the ANN index — slower than vector-only's ~4 ms, but the results are **exact within scope**
+  (recall 1.0) vs vector-only's approximate + unscoped output. A more selective filter (e.g. a
+  single `report_id`) shrinks the candidate set further and is much faster. The latency/exactness
+  tradeoff is selectivity-driven and acceptable.
+
+### Retrieval Quality Findings (task §12)
+With two companies holding **near-identical** "supply chain disruption risk" text (Tesla 2024,
+GM 2023): **vector-only** returns both companies' chunks (it cannot disambiguate by company/
+period); **hybrid** filtered to `company=Tesla, year=2024` returns **only Tesla's** content. The
+filtered candidate set is exactly scoped (recall 1.0 within scope), so hybrid is strictly more
+precise for context-bound financial questions — the core motivation of the phase. Profile scoping
+(`RISK_ANALYSIS`) likewise restricts candidates to risk sections.
+
+### Lessons Learned
+- **Filter selectivity drives the plan.** Selective filters → fast exact scan over a tiny
+  candidate set (best of both: exact + scoped). Low-selectivity filters over large corpora can
+  be slower than ANN — worth surfacing `candidate_count` so callers understand the cost.
+- **Denormalized chunk metadata pays off:** filtering sections via the GIN-indexed JSONB `@>`
+  avoided a second join and reused the Phase 1C index — the early "metadata is part of the chunk"
+  decision (ADR-007 / Lessons) directly enabled cheap hybrid filtering.
+- **A shared hashing embedder makes a real hybrid-vs-vector quality test** possible offline:
+  identical text across companies isolates exactly what metadata filtering fixes.
+
+### Risks Discovered
+- **Low-selectivity filters + large corpus:** filtered exact scan can dominate latency; a future
+  phase may add a composite/partial index or pgvector iterative index scans for filtered ANN.
+- **Section filter trusts chunk metadata:** `normalized_section_name` is the denormalized copy;
+  if re-chunking ever diverges from `report_sections`, section filters could drift (acceptable
+  now — the chunker writes both consistently).
+- **No relevance fusion yet:** this is metadata-filtered vector search, not keyword+vector score
+  fusion — true lexical hybrid (BM25) and re-ranking are later phases (ADR-010).
+
+### Future Phase Dependencies
+- **Re-ranking (ADR-010, BGE)** consumes the scoped top-K `SearchResult` candidates.
+- **Query rewriting / HyDE** wrap `QueryEmbedder`; **RAG/agents** pass a `RetrievalContext` to
+  scope evidence; profiles seed the metric/risk/tone agents' default scopes.
+
+### Exit Criteria Verification
+| Criterion | Status |
+|---|---|
+| Metadata filtering operational | ✅ 7 optional filters (typed join + JSONB `@>`) |
+| Hybrid retrieval operational | ✅ filter → candidates → vector search |
+| Retrieval profiles implemented | ✅ GENERAL/RISK/TONE/FIN-STMT/GUIDANCE |
+| Candidate filtering implemented | ✅ filter-before-rank; `candidate_count` surfaced |
+| Hybrid APIs operational | ✅ `/search/hybrid` |
+| Debug APIs operational | ✅ `/search/hybrid/debug` (+ `/profiles`) |
+| Observability added | ✅ candidate count + per-stage latency |
+| Tests pass | ✅ 156 unit; 11 hybrid integration (isolation-verified) |
+| Documentation updated | ✅ this report + ADR-015 + TDL-016 + perf/quality tables |
+| Demonstrated improvement over vector-only | ✅ scoped, exact-within-scope; 10× candidate reduction |
+
+### Final Status
+> **PHASE 2C COMPLETED.** Phase 2D / query rewriting / HyDE / re-ranking / RAG / agents
+> **NOT started — strictly out of scope.**
+
+---
+
 ## 3. Technology Decisions Log
 
 > Template: **Decision · Alternatives Considered · Chosen Because · Tradeoffs · Expected Impact**
@@ -1004,6 +1174,20 @@ were used — a near-orthogonal **worst case** for ANN recall; real clustered em
   CONCURRENTLY; recall is approximate (<100%) and ef_search trades recall for latency.
 - **Expected impact:** sub-5 ms p95 vector scans through ~1k chunks (measured) with high recall;
   tunable as the corpus grows.
+
+### TDL-016 — Hybrid filter sources + retrieval profiles (Phase 2C)
+- **Decision:** Apply report-level filters (company_id/year/quarter/report_type) via a **join to
+  `reports`** (typed, btree-indexed); `report_id` direct on `document_chunks`; section filters via
+  **JSONB `metadata @>` containment** (GIN-indexed). Bundle task scopes as **retrieval profiles**
+  that *prefer* canonical sections without overriding an explicit filter.
+- **Alternatives:** filter everything off the denormalized chunk JSONB (incl. company/year);
+  a dedicated columnar denormalization on `document_chunks`; hardcoded per-agent filter logic.
+- **Chosen because:** typed columns give exact, index-backed comparisons for IDs/years and avoid
+  trusting denormalized copies for high-cardinality keys; JSONB `@>` reuses the existing GIN index
+  for sections with no extra join; profiles centralize future agents' default scopes as data.
+- **Tradeoffs:** report-level filters need a join; section filtering trusts the chunk's
+  denormalized `normalized_section_name`; profiles are static config (no learning).
+- **Expected impact:** cheap, correct metadata scoping today; a clean seam for Phase-3+ agents.
 
 ---
 
@@ -1163,6 +1347,28 @@ were used — a near-orthogonal **worst case** for ANN recall; real clustered em
   ≥ 0.92 on adversarial random data. Score interpretation: ~0.95 highly relevant, ~0.80
   relevant, ~0.50 weak. (See TDL-015; performance table in the Phase 2B report.)
 
+### ADR-015 — Filter-Before-Search Hybrid Retrieval  *(Accepted — Phase 2C)*
+- **Context:** Financial questions are partitioned by company/period/section; answering "supply
+  chain risks" across *every* company is wrong. Retrieval must scope to the relevant subset.
+- **Problem:** How to combine structured metadata constraints with semantic vector search.
+- **Options:**
+  1. **Filter, then vector-search the filtered candidates** (filters + cosine ranking in one SQL).
+  2. **Vector-search the whole corpus, then post-filter** the ANN results by metadata.
+  3. Two separate systems (a metadata store + a vector store) joined in app code.
+- **Decision:** **Option 1** — metadata predicates live in the **same** statement as `ORDER BY
+  embedding <=> q LIMIT k`, so Postgres constrains the candidate set first and ranks within it.
+- **Reasoning:** post-filtering ANN output (option 2) is both wrong and lossy — the HNSW index
+  returns k nearest *globally*, and filtering them can yield far fewer than k (or zero) even when
+  matching chunks exist; it also wastes work ranking irrelevant content. Filtering first means
+  selective queries scan a small candidate set **exactly** (recall 1.0 within scope). Option 3
+  duplicates infrastructure that one Postgres+pgvector already provides (ADR-002).
+- **Consequences:** correctness and precision (scoped, exact-within-scope results; measured 10×
+  candidate reduction). Tradeoff: a **low-selectivity** filter over a large corpus triggers a
+  filtered exact scan that can be slower than unfiltered ANN (measured ~10.8 ms vs ~4 ms at 10k,
+  10% selectivity) — acceptable, and addressable later with composite/partial indexes or pgvector
+  iterative index scans. This is **metadata-filtered vector search**, not lexical (BM25) fusion or
+  re-ranking — those are later phases (ADR-010). (See TDL-016; Phase 2C report.)
+
 ---
 
 ## 5. Implementation Log
@@ -1208,7 +1414,11 @@ were used — a near-orthogonal **worst case** for ANN recall; real clustered em
 | 2026-06-11 | 2B | Search APIs + observability | nickg | `POST /search/vector` + `/search/debug`; top_k [5,50]; per-stage latency + error logging | ✅ Completed |
 | 2026-06-11 | 2B | Tests + perf + docs | nickg | 13 new unit (122 total); 8 search integration incl. retrieval-quality; latency/recall benchmark (≤5ms p95 @1k); Phase 2B report + ADR-014 | ✅ Completed |
 | 2026-06-11 | 2B | **Phase 2B COMPLETE** | nickg | All exit criteria met; metadata filter / hybrid / rerank / RAG not started | ✅ Completed |
-| — | 2C+ | Hybrid retrieval / rerank | | Metadata filter, hybrid (vector+keyword), query rewrite/HyDE, BGE re-rank (ADR-010) | ⬜ Todo |
+| 2026-06-11 | 2C | Hybrid retrieval layer | nickg | `app/retrieval/hybrid/` — RetrievalContext, metadata filter builder (join + JSONB `@>`), profiles, validation, `HybridRetrievalService`; ADR-015/TDL-016 | ✅ Completed |
+| 2026-06-11 | 2C | Hybrid APIs + observability | nickg | `POST /search/hybrid` + `/hybrid/debug` + `GET /search/profiles`; candidate count + per-stage latency | ✅ Completed |
+| 2026-06-11 | 2C | Tests + perf + quality + docs | nickg | 34 new unit (156 total); 11 hybrid integration incl. hybrid-vs-vector quality; perf (10× candidate reduction @100/1k/10k); Phase 2C report | ✅ Completed |
+| 2026-06-11 | 2C | **Phase 2C COMPLETE** | nickg | All exit criteria met; query-rewrite / HyDE / rerank / RAG not started | ✅ Completed |
+| — | 2D+ | Rerank / rewrite / RAG | | Query rewrite/HyDE, BGE re-rank (ADR-010), groundedness, then RAG/agents | ⬜ Todo |
 
 > _Add a row per meaningful change. Mark status: ⬜ Todo · 🟡 In progress · ✅ Completed · ⛔ Blocked._
 
