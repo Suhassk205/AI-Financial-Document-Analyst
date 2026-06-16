@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+from app.core.logging import get_logger
 
 # Single application-wide async engine (connection pool).
 engine = create_async_engine(
@@ -53,6 +54,53 @@ async def ping() -> bool:
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     return True
+
+
+async def verify_database_health() -> None:
+    """Startup database health check.
+
+    Verifies that:
+      1. The database is reachable
+      2. The pgvector ('vector') extension exists
+      3. Core tables exist (users, companies, reports, document_chunks)
+
+    Raises ValueError if any checks fail in production. Logs warnings in non-production.
+    """
+    log = get_logger(__name__)
+    try:
+        async with engine.connect() as conn:
+            # 1. Reachability
+            await conn.execute(text("SELECT 1"))
+
+            # 2. Check pgvector extension exists
+            res_ext = await conn.execute(
+                text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+            )
+            if not res_ext.scalar():
+                raise ValueError("pgvector extension ('vector') is not installed in the database.")
+
+            # 3. Check core tables exist
+            required_tables = {"users", "companies", "reports", "document_chunks"}
+            res_tables = await conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public'"
+                )
+            )
+            existing_tables = {row[0] for row in res_tables.fetchall()}
+            missing_tables = required_tables - existing_tables
+            if missing_tables:
+                raise ValueError(
+                    f"Required database tables are missing: {', '.join(missing_tables)}. "
+                    "Please run migrations using 'alembic upgrade head'."
+                )
+        log.info("database.health_check_passed")
+    except Exception as exc:
+        msg = f"Database health check failed: {exc}"
+        log.error("database.health_check_failed", error=str(exc))
+        if settings.app_env.value == "production":
+            raise ValueError(msg) from exc
+
 
 
 # ---------------------------------------------------------------------------

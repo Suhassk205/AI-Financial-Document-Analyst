@@ -2209,6 +2209,7 @@ Phase 11 implements the production hardening and deployment preparation layer. W
 | 2026-06-12 | 10A | Analyst Workspace & Visualizations | pranav | Executive Dashboard, Financial charts, Risk matrices, and Management Tone visuals | ✅ Completed |
 | 2026-06-12 | 10B | Frontend Design System & Demo Polish | pranav | Scaffolded UI design system tokens/components, keyboard sidebar controls, Guided flow widget, telemetry diagnostics, high-fidelity skeletons, refined pages (Benchmark, Memo, Agent, Management), and unit test suites | ✅ Completed |
 | 2026-06-12 | 11 | Production Hardening & Deployment | pranav | JWT auth, RBAC, Redis caching, Redis rate limiting, SecurityHeadersMiddleware, prompt guards, Docker prod, Railway/Render/Vercel templates, CI/CD Actions workflows, unit tests | ✅ Completed |
+| 2026-06-16 | 11 | Neon PostgreSQL Integration | pranav | Added support for Neon production database connection, disabled asyncpg prepared statements cache on pooled connections, added startup database health check, updated environment templates, and wrote Neon setup guide | ✅ Completed |
 
 > _Add a row per meaningful change. Mark status: ⬜ Todo · 🟡 In progress · ✅ Completed · ⛔ Blocked._
 
@@ -2718,3 +2719,71 @@ the competition floor were found and fixed before code freeze.
 redesigned; nothing was deployed.
 
 ---
+
+## 13. Neon PostgreSQL Integration & Deployment Guide
+
+This section outlines the implementation details, architectural choices, and verification runbook for using **Neon PostgreSQL** as the primary production datastore.
+
+### 13.1 Architecture Choices & Decisions
+
+#### Why Neon was Selected
+1. **Serverless Scale-to-Zero**: Billed strictly on active usage. If the application is idle, database computing drops to 0 active virtual CPUs, reducing fixed infrastructure costs.
+2. **Instant Branching**: Creates isolated copy-on-write database branches instantly. Allows CI/CD pipelines to spawn preview databases for pull requests without copying whole files or incurring delays.
+3. **Native pgvector Support**: Supports the `vector` extension, enabling 768-dimensional float arrays and HNSW indexing for hybrid search.
+4. **Managed Connection Pooling**: Built-in connection pooler endpoints powered by PGBouncer, eliminating the need to maintain an independent pooling layer.
+
+#### Alternatives Considered
+- **AWS RDS / Aurora**: High baseline cost, no scale-to-zero compute pricing, complex IAM/network setup.
+- **Supabase**: Excellent, but tied to an entire BaaS stack (auth, storage, realtime), which duplicates features already owned by the FastAPI app.
+- **Railway/Render PostgreSQL**: Direct PaaS addons lack advanced branching and automatic scale-to-zero features.
+
+### 13.2 Connection Pooling Considerations
+Neon uses PGBouncer to manage connections. In **transaction pooling** mode, server sessions are not bound to clients, which creates conflicts with library features relying on session state:
+1. **Prepared Statements**: The `asyncpg` driver caches prepared statement queries by default. When connected to a transaction pooler, this causes statement mismatch errors.
+   - *Mitigation*: We add `prepared_statement_cache_size=0` and `ssl=require` as query parameters on the Uvicorn application's `DATABASE_URL` connection string:
+     `postgresql+asyncpg://[user]:[password]@[host]-pooler.neon.tech/[db]?ssl=require&prepared_statement_cache_size=0`
+2. **Migrations & Advisory Locks**: Alembic migrations perform DDL changes (e.g. creating tables) and use database advisory locks, which require a direct or session-level connection.
+   - *Mitigation*: The migration runner and synchronous database handles (`DATABASE_URL_SYNC`) bypass the pooler entirely and connect directly to the direct Neon host:
+     `postgresql+psycopg://[user]:[password]@[host].neon.tech/[db]?sslmode=require`
+
+### 13.3 pgvector Compatibility Verification
+Neon supports `pgvector` out-of-the-box.
+- Embedding size of 768 is fully supported by Neon's vector operations.
+- Cosine similarity distance searches (`1 - (embedding <=> :query)`) map cleanly.
+- HNSW indexes (`document_chunks` table) build using `vector_cosine_ops` natively.
+
+### 13.4 Runbook: Migrating & Verifying Neon
+
+#### Run Migrations on Neon
+Apply Alembic migrations to Neon using the direct database URL (non-pooled):
+```bash
+# Set environment sync URL to the direct Neon host and run Alembic
+DATABASE_URL_SYNC="postgresql+psycopg://analyst_prod_user:PASSWORD@ep-neon-prod-db.us-east-1.aws.neon.tech/financial_analyst_prod?sslmode=require" alembic upgrade head
+```
+
+#### Verify pgvector Extension
+To verify that the `vector` extension is active in your database, execute:
+```bash
+# Query active extensions using psql or a database client
+psql "postgresql://analyst_prod_user:PASSWORD@ep-neon-prod-db.us-east-1.aws.neon.tech/financial_analyst_prod?sslmode=require" -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
+```
+*Expected Output:*
+```
+ extname | extversion 
+---------+------------
+ vector  | 0.7.0
+(1 row)
+```
+
+#### Verify Database Connectivity
+Execute a test check via the application's verification command:
+```bash
+# Verify the sync connection
+python -c "from sqlalchemy import create_engine, text; engine = create_engine('postgresql+psycopg://analyst_prod_user:PASSWORD@ep-neon-prod-db.us-east-1.aws.neon.tech/financial_analyst_prod?sslmode=require'); print(engine.connect().execute(text('SELECT 1')).scalar())"
+
+# Verify the async connection
+python -c "import asyncio; from sqlalchemy.ext.asyncio import create_async_engine; from sqlalchemy import text; async def test(): e = create_async_engine('postgresql+asyncpg://analyst_prod_user:PASSWORD@ep-neon-prod-db-pooler.us-east-1.aws.neon.tech/financial_analyst_prod?ssl=require&prepared_statement_cache_size=0'); async with e.connect() as conn: print(await conn.scalar(text('SELECT 1'))); await test()"
+```
+*Expected Output:*
+Both commands should return `1`.
+

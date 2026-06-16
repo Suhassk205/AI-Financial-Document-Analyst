@@ -22,6 +22,9 @@ from app.core.exceptions import AppError
 from app.core.logging import configure_logging, get_logger
 from app.core.observability import PrometheusMiddleware, metrics_endpoint
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.db.session import verify_database_health
+
+
 def verify_production_config() -> None:
     """Validate that production environment has secure secrets and connections configured."""
     if settings.app_env.value == "production":
@@ -46,6 +49,7 @@ async def lifespan(app: FastAPI):
     log = get_logger(__name__)
     try:
         verify_production_config()
+        await verify_database_health()
     except Exception as e:
         log.critical("app.startup_failed", error=str(e))
         raise
