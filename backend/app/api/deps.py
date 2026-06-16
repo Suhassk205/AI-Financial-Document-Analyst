@@ -26,6 +26,23 @@ async def get_current_user(
     token: str | None = Depends(oauth2_scheme),
 ) -> User:
     """Extract and authenticate the current user from JWT token."""
+    if settings.demo_mode:
+        stmt = select(User).where(User.email == "demo@example.com")
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+        if user is None:
+            from app.core.security import hash_password
+            user = User(
+                email="demo@example.com",
+                password_hash=hash_password("demopassword"),
+                role=UserRole.ADMIN,
+                is_active=True,
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        return user
+
     if settings.app_env.value == "local" and not token:
         # For local development, automatically fall back to or create a dev admin user
         stmt = select(User).where(User.email == "dev@example.com")

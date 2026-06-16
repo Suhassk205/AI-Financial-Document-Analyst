@@ -2787,3 +2787,34 @@ python -c "import asyncio; from sqlalchemy.ext.asyncio import create_async_engin
 *Expected Output:*
 Both commands should return `1`.
 
+### 13.5 Demo Authentication Mode
+To support staging/review environments and preview deployments (like on Render) without requiring a frontend login UI implementation, the backend supports a `DEMO_MODE` flag:
+* **Configuration**: Set `DEMO_MODE=true` in the environment.
+* **Behavior**: Bypasses JWT authentication checks on protected endpoints, automatically injecting a mock user with email `demo@example.com` and `ADMIN` role.
+* **Status Visibility**: The endpoints `/health` and `/status` will report `"demo_mode": true` in their JSON responses when enabled.
+* **Security Warning**: Demo mode should only be used in non-production, development, or preview environments. Ensure `DEMO_MODE` is unset or set to `false` in production.
+
+### 13.6 Render Deployment Guide
+When deploying the application to **Render**, the following setup is recommended:
+
+#### Backend Service
+1. **Service Type**: Web Service.
+2. **Environment**: Python.
+3. **Environment Variables**:
+   * `DEMO_MODE`: Set to `true` to enable Demo Authentication Mode.
+   * `DATABASE_URL`: Production async connection string (e.g. `postgresql+asyncpg://[user]:[password]@[host]-pooler.neon.tech/[db]?ssl=require&prepared_statement_cache_size=0`).
+   * `DATABASE_URL_SYNC`: Production sync connection string (direct host, bypassing pooler: `postgresql+psycopg://[user]:[password]@[host].neon.tech/[db]?sslmode=require`).
+   * `JWT_SECRET`: A secure, randomly generated string for JWT tokens.
+   * `JWT_ALGORITHM`: `HS256` (default).
+4. **Build Command**: `pip install -r requirements.txt` (or equivalent).
+5. **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+
+#### Frontend Service
+1. **Service Type**: Static Site.
+2. **Build Command**: `npm run build`.
+3. **Publish Directory**: `dist`.
+4. **Redirects/Rewrites Rules**: Add a rewrite rule in Render to route API requests to the backend service:
+   * **Source**: `/api/*`
+   * **Destination**: `https://your-backend-service.onrender.com/api/*`
+   * **Action**: Rewrite
+

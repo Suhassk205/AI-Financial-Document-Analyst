@@ -54,6 +54,8 @@ async def lifespan(app: FastAPI):
         log.critical("app.startup_failed", error=str(e))
         raise
     log.info("app.startup", env=settings.app_env.value, name=settings.app_name)
+    if settings.demo_mode:
+        log.warning("app.startup.demo_mode_active", message="DEMO_MODE is enabled. Authentication is bypassed.")
     yield
     log.info("app.shutdown")
 

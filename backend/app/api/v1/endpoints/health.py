@@ -94,7 +94,7 @@ async def perform_full_checks() -> dict[str, str]:
 @router.get("/health", summary="Liveness probe")
 async def health() -> dict:
     """Liveness: the process is running. Intentionally dependency-free."""
-    return {"status": "ok"}
+    return {"status": "ok", "demo_mode": settings.demo_mode}
 
 
 @router.get("/ready", summary="Readiness probe")
@@ -117,5 +117,6 @@ async def service_status() -> dict:
         "version": "1.0.0",
         "phase": "11 — production hardening & deployment preparation",
         "debug": settings.debug,
+        "demo_mode": settings.demo_mode,
         "checks": checks,
     }
