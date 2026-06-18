@@ -25,8 +25,8 @@ export default function EmptyState({
       )}
       role="status"
     >
-      <div className="w-14 h-14 rounded-full bg-surface-100 dark:bg-surface-800 flex items-center justify-center mb-4">
-        {icon ?? <Inbox className="w-7 h-7 text-surface-400" />}
+      <div className="w-16 h-16 rounded-full bg-brand-50 dark:bg-brand-900/30 ring-8 ring-brand-50/50 dark:ring-brand-900/10 flex items-center justify-center mb-5 transition-all">
+        {icon ?? <Inbox className="w-8 h-8 text-brand-500 dark:text-brand-400" />}
       </div>
       <h3 className="text-base font-semibold text-surface-700 dark:text-surface-300">{title}</h3>
       <p className="text-sm text-surface-500 dark:text-surface-500 mt-1 max-w-sm">{description}</p>
