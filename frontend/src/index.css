@@ -26,8 +26,8 @@
 
   /* Scrollbar styling */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
   }
 
   ::-webkit-scrollbar-track {
@@ -58,7 +58,7 @@
   }
 
   .glass-panel-hover {
-    @apply glass-panel transition-shadow duration-200 hover:shadow-card-hover;
+    @apply glass-panel transition-all duration-300 hover:shadow-card-hover hover:-translate-y-1;
   }
 
   .metric-value {
