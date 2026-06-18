@@ -65,7 +65,7 @@ def _seed(session: Session) -> dict:
 def test_comparison_task_stores_results(sync_session: Session) -> None:
     ids = _seed(sync_session)
     result = generate_metric_comparisons_task(str(ids["r24"]))
-    assert result["status"] == "COMPARED"
+    assert result["status"] == "COMPARISON_READY"
     assert result["comparisons"] == 3      # REVENUE, NET_INCOME, FREE_CASH_FLOW (YoY)
 
     rows = (
@@ -160,4 +160,4 @@ def test_no_company_yields_no_comparisons(sync_session: Session) -> None:
     sync_session.add(r)
     sync_session.commit()
     result = generate_metric_comparisons_task(str(r.id))
-    assert result["status"] == "COMPARED" and result["comparisons"] == 0
+    assert result["status"] == "COMPARISON_READY" and result["comparisons"] == 0

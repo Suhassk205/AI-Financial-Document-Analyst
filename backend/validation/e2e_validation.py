@@ -7,7 +7,7 @@ stage produced queryable output:
     Financial → Risk → Tone → Benchmark → Memo → Agent
 
 The deterministic demo dataset stands in for the ingestion stages (a fully
-``TONE_EXTRACTED`` report with sections, embedded chunks, metrics, risks and
+``READY`` report with sections, embedded chunks, metrics, risks and
 tone), so this check is reproducible and key-free. The retrieval, benchmark,
 memo and agent stages are exercised against the running services.
 
@@ -39,7 +39,7 @@ def run(client: ValidationClient | None = None) -> Suite:
         rep = client.get(f"/reports/{report_id}")
         status = rep.json().get("status") if rep.status == 200 else None
         suite.record("Upload→Process: report in terminal status",
-                     rep.status == 200 and status == "TONE_EXTRACTED", f"status={status}")
+                     rep.status == 200 and status == "READY", f"status={status}")
 
         # Stage 1: Section extraction.
         sec = client.get(f"/reports/{report_id}/sections")

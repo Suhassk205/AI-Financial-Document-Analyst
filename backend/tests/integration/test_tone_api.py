@@ -86,13 +86,13 @@ def test_tone_tasks_ingestion_and_evolution(sync_session: Session) -> None:
 
     # 1. Run tone extraction for 2023 report
     res_2023 = extract_management_tone_task(str(report_2023_id))
-    assert res_2023["status"] == "TONE_EXTRACTED"
+    assert res_2023["status"] == "READY"
     assert res_2023["tones"] >= 1
     assert res_2023["evolutions"] == 0  # No prior report to compare against yet
 
-    # Verify report status is now TONE_EXTRACTED
+    # Verify report status is now READY
     report_2023 = sync_session.get(Report, report_2023_id)
-    assert report_2023.status == ReportStatus.TONE_EXTRACTED
+    assert report_2023.status == ReportStatus.READY
 
     # Verify tone record was created
     t_2023 = sync_session.query(ManagementTone).filter_by(report_id=report_2023_id).all()
@@ -102,12 +102,12 @@ def test_tone_tasks_ingestion_and_evolution(sync_session: Session) -> None:
 
     # 2. Run tone extraction for 2024 report (should trigger evolution logic against 2023)
     res_2024 = extract_management_tone_task(str(report_2024_id))
-    assert res_2024["status"] == "TONE_EXTRACTED"
+    assert res_2024["status"] == "READY"
     assert res_2024["tones"] >= 1
     assert res_2024["evolutions"] >= 1
 
     report_2024 = sync_session.get(Report, report_2024_id)
-    assert report_2024.status == ReportStatus.TONE_EXTRACTED
+    assert report_2024.status == ReportStatus.READY
 
     t_2024 = sync_session.query(ManagementTone).filter_by(report_id=report_2024_id).all()
     assert len(t_2024) >= 1

@@ -39,6 +39,10 @@ export interface ReportListItem {
   page_count: number | null;
   created_at: string;
   updated_at: string;
+  progress?: number;
+  failed_stage?: string | null;
+  completed_stage?: string | null;
+  retry_count?: number;
 }
 
 export interface ReportListResponse {

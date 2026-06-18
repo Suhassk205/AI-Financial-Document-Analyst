@@ -426,6 +426,9 @@ class SyncReportRepository:
         report.status = ReportStatus.PROCESSING
         report.processing_started_at = datetime.now(UTC)
         report.error_message = None
+        report.failed_stage = None
+        report.completed_stage = None
+        report.retry_count = 0
         self.session.commit()
 
     def replace_pages(self, report_id: uuid.UUID, pages: list[tuple[int, str]]) -> int:
@@ -443,12 +446,15 @@ class SyncReportRepository:
     def mark_processed(self, report: Report, *, total_pages: int) -> None:
         report.status = ReportStatus.PROCESSED
         report.total_pages = total_pages
+        report.completed_stage = "PROCESSED"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
-    def mark_failed(self, report: Report, *, message: str) -> None:
+    def mark_failed(self, report: Report, *, message: str, failed_stage: str | None = None) -> None:
         report.status = ReportStatus.FAILED
         report.error_message = message[:2000]
+        if failed_stage is not None:
+            report.failed_stage = failed_stage
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
@@ -487,6 +493,7 @@ class SyncReportRepository:
 
     def mark_sectioned(self, report: Report) -> None:
         report.status = ReportStatus.SECTIONED
+        report.completed_stage = "SECTIONED"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
@@ -527,6 +534,7 @@ class SyncReportRepository:
 
     def mark_chunked(self, report: Report) -> None:
         report.status = ReportStatus.CHUNKED
+        report.completed_stage = "CHUNKED"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
@@ -576,6 +584,7 @@ class SyncReportRepository:
 
     def mark_embedded(self, report: Report) -> None:
         report.status = ReportStatus.EMBEDDED
+        report.completed_stage = "EMBEDDED"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
@@ -624,7 +633,7 @@ class SyncReportRepository:
         )
 
     def mark_extracting(self, report: Report) -> None:
-        report.status = ReportStatus.EXTRACTING
+        report.status = ReportStatus.METRICS_EXTRACTING
         report.error_message = None
         self.session.commit()
 
@@ -640,7 +649,8 @@ class SyncReportRepository:
         return len(metrics)
 
     def mark_extracted(self, report: Report) -> None:
-        report.status = ReportStatus.EXTRACTED
+        report.status = ReportStatus.METRICS_READY
+        report.completed_stage = "METRICS_READY"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
@@ -678,14 +688,15 @@ class SyncReportRepository:
         return len(rows)
 
     def mark_compared(self, report: Report) -> None:
-        report.status = ReportStatus.COMPARED
+        report.status = ReportStatus.COMPARISON_READY
+        report.completed_stage = "COMPARISON_READY"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
     # ---- Phase 3C: financial analytics -------------------------------------
 
     def mark_analyzing(self, report: Report) -> None:
-        report.status = ReportStatus.ANALYZING
+        report.status = ReportStatus.ANALYTICS
         report.error_message = None
         self.session.commit()
 
@@ -706,14 +717,15 @@ class SyncReportRepository:
         return len(rows)
 
     def mark_analyzed(self, report: Report) -> None:
-        report.status = ReportStatus.ANALYZED
+        report.status = ReportStatus.ANALYTICS_READY
+        report.completed_stage = "ANALYTICS_READY"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
     # ---- Phase 4: risk factors & risk evolution (sync, Celery worker) --------
 
     def mark_risk_extracting(self, report: Report) -> None:
-        report.status = ReportStatus.RISK_EXTRACTING
+        report.status = ReportStatus.RISKS
         report.error_message = None
         self.session.commit()
 
@@ -729,7 +741,8 @@ class SyncReportRepository:
         return len(risks)
 
     def mark_risk_extracted(self, report: Report) -> None:
-        report.status = ReportStatus.RISK_EXTRACTED
+        report.status = ReportStatus.RISKS_READY
+        report.completed_stage = "RISKS_READY"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 
@@ -828,12 +841,13 @@ class SyncReportRepository:
         return len(tones)
 
     def mark_tone_extracting(self, report: Report) -> None:
-        report.status = ReportStatus.TONE_EXTRACTING
+        report.status = ReportStatus.TONE
         report.error_message = None
         self.session.commit()
 
     def mark_tone_extracted(self, report: Report) -> None:
-        report.status = ReportStatus.TONE_EXTRACTED
+        report.status = ReportStatus.READY
+        report.completed_stage = "READY"
         report.processing_completed_at = datetime.now(UTC)
         self.session.commit()
 

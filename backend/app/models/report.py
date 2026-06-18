@@ -57,7 +57,7 @@ class Report(UUIDMixin, Base):
 
     status: Mapped[ReportStatus] = mapped_column(
         SQLEnum(
-            ReportStatus, native_enum=False, length=16, name="report_status", validate_strings=True
+            ReportStatus, native_enum=False, length=32, name="report_status", validate_strings=True
         ),
         nullable=False,
         default=ReportStatus.UPLOADED,
@@ -65,6 +65,70 @@ class Report(UUIDMixin, Base):
     )
     total_pages: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Metadata for fully automated event-driven pipeline
+    failed_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    @property
+    def progress(self) -> int:
+        """Calculate the completion percentage of the ingestion & extraction pipeline."""
+        progress_map = {
+            ReportStatus.UPLOADED: 0,
+            ReportStatus.PROCESSING: 10,
+            ReportStatus.PROCESSED: 20,
+            ReportStatus.SECTIONING: 30,
+            ReportStatus.SECTIONED: 40,
+            ReportStatus.CHUNKING: 50,
+            ReportStatus.CHUNKED: 60,
+            ReportStatus.EMBEDDING: 70,
+            ReportStatus.EMBEDDED: 75,
+            "METRICS_EXTRACTING": 80,
+            "METRICS_READY": 85,
+            "COMPARING": 88,
+            "COMPARISON_READY": 90,
+            "ANALYTICS": 92,
+            "ANALYTICS_READY": 95,
+            "RISKS": 97,
+            "RISKS_READY": 98,
+            "TONE": 99,
+            "READY": 100,
+        }
+        
+        # Map the Enum members (which may resolve to original/new values)
+        progress_map[ReportStatus.EXTRACTING] = 80
+        progress_map[ReportStatus.EXTRACTED] = 85
+        progress_map[ReportStatus.COMPARING] = 88
+        progress_map[ReportStatus.COMPARED] = 90
+        progress_map[ReportStatus.ANALYZING] = 92
+        progress_map[ReportStatus.ANALYZED] = 95
+        progress_map[ReportStatus.RISK_EXTRACTING] = 97
+        progress_map[ReportStatus.RISK_EXTRACTED] = 98
+        progress_map[ReportStatus.TONE_EXTRACTING] = 99
+        progress_map[ReportStatus.TONE_EXTRACTED] = 100
+
+        current_status = self.status
+        if current_status == ReportStatus.FAILED:
+            if not self.completed_stage:
+                return 0
+            stage_to_status = {
+                "PROCESSED": ReportStatus.PROCESSED,
+                "SECTIONED": ReportStatus.SECTIONED,
+                "CHUNKED": ReportStatus.CHUNKED,
+                "EMBEDDED": ReportStatus.EMBEDDED,
+                "METRICS_READY": ReportStatus.METRICS_READY,
+                "COMPARISON_READY": ReportStatus.COMPARISON_READY,
+                "ANALYTICS_READY": ReportStatus.ANALYTICS_READY,
+                "RISKS_READY": ReportStatus.RISKS_READY,
+                "READY": ReportStatus.READY,
+            }
+            mapped_status = stage_to_status.get(self.completed_stage)
+            if mapped_status:
+                return progress_map.get(mapped_status, 0)
+            return 0
+            
+        return progress_map.get(current_status, 0)
 
     processing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

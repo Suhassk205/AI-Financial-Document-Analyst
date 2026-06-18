@@ -55,7 +55,7 @@ def _seed(session: Session) -> uuid.UUID:
 def test_extraction_task_stores_metrics(sync_session: Session) -> None:
     report_id = _seed(sync_session)
     result = extract_financial_metrics_task(str(report_id))
-    assert result["status"] == "EXTRACTED"
+    assert result["status"] == "METRICS_READY"
     assert result["metrics"] >= 6
 
     rows = (

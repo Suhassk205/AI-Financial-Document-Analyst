@@ -47,6 +47,12 @@ class ReportDetail(BaseModel):
     uploaded_at: datetime
     updated_at: datetime
 
+    # Automated pipeline metadata
+    progress: int
+    failed_stage: str | None = None
+    completed_stage: str | None = None
+    retry_count: int
+
 
 class ReportListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -60,6 +66,12 @@ class ReportListItem(BaseModel):
     status: ReportStatus
     total_pages: int | None = None
     uploaded_at: datetime
+
+    # Automated pipeline metadata
+    progress: int
+    failed_stage: str | None = None
+    completed_stage: str | None = None
+    retry_count: int
 
 
 class ReportListResponse(BaseModel):

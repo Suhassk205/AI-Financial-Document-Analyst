@@ -70,9 +70,24 @@ export default function DashboardPage() {
   }
 
   const reports = data?.items ?? [];
-  const latestReport = reports[0];
-  const processed = reports.filter((r) => ["EMBEDDED", "EXTRACTED", "COMPARED", "ANALYZED", "RISK_EXTRACTED", "TONE_EXTRACTED", "COMPLETED", "READY"].includes(r.status));
+  const processed = reports.filter((r) =>
+    [
+      "EMBEDDED",
+      "EXTRACTED",
+      "COMPARED",
+      "ANALYZED",
+      "RISK_EXTRACTED",
+      "TONE_EXTRACTED",
+      "COMPLETED",
+      "READY",
+      "METRICS_READY",
+      "COMPARISON_READY",
+      "ANALYTICS_READY",
+      "RISKS_READY",
+    ].includes(r.status)
+  );
   const failed = reports.filter((r) => r.status === "FAILED");
+  const latestReport = reports[0];
 
   const handlePinnedClick = (companyName: string) => {
     trackInteraction("Pinned Example Clicked", companyName);
@@ -244,34 +259,80 @@ export default function DashboardPage() {
                 key={r.id}
                 className="px-5 py-3.5 flex items-center justify-between hover:bg-surface-50/50 transition-colors"
               >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                      r.status === "FAILED"
-                        ? "bg-danger"
-                        : ["EMBEDDED", "EXTRACTED", "COMPARED", "ANALYZED", "RISK_EXTRACTED", "TONE_EXTRACTED", "COMPLETED", "READY"].includes(r.status)
-                          ? "bg-success animate-pulse"
-                          : "bg-warning"
-                    }`}
-                  />
-                  <div>
-                    <span className="text-sm font-semibold text-surface-900">
-                      {r.original_filename ?? `Report ${r.id.slice(0, 8)}`}
-                    </span>
-                    <span className="text-xs text-surface-500 ml-3">
-                      {r.report_type} · {r.year}
-                      {r.quarter ? ` Q${r.quarter}` : ""}
-                    </span>
+                <div className="flex-1 min-w-0 mr-4">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        r.status === "FAILED"
+                          ? "bg-danger"
+                          : [
+                              "EMBEDDED",
+                              "EXTRACTED",
+                              "COMPARED",
+                              "ANALYZED",
+                              "RISK_EXTRACTED",
+                              "TONE_EXTRACTED",
+                              "COMPLETED",
+                              "READY",
+                              "METRICS_READY",
+                              "COMPARISON_READY",
+                              "ANALYTICS_READY",
+                              "RISKS_READY",
+                            ].includes(r.status)
+                            ? "bg-success animate-pulse"
+                            : "bg-warning"
+                      }`}
+                    />
+                    <div className="min-w-0">
+                      <span className="text-sm font-semibold text-surface-900 truncate block">
+                        {r.original_filename ?? `Report ${r.id.slice(0, 8)}`}
+                      </span>
+                      <span className="text-xs text-surface-500 block">
+                        {r.report_type} · {r.year}
+                        {r.quarter ? ` Q${r.quarter}` : ""}
+                      </span>
+                    </div>
                   </div>
+                  {r.status !== "READY" && r.status !== "FAILED" && (
+                    <div className="mt-2 pl-[22px] max-w-md">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[9px] text-surface-450">
+                          {r.completed_stage ? `Last: ${r.completed_stage}` : "Starting..."}
+                        </span>
+                        <span className="text-[9px] font-mono text-brand-600 font-bold">
+                          {r.progress ?? 0}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-surface-100 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="bg-brand-500 h-1.5 rounded-full transition-all duration-500 ease-out"
+                          style={{ width: `${r.progress ?? 0}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 shrink-0">
                   <span
                     className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                       r.status === "FAILED"
                         ? "bg-danger-light text-danger-dark"
-                        : ["EMBEDDED", "EXTRACTED", "COMPARED", "ANALYZED", "RISK_EXTRACTED", "TONE_EXTRACTED", "COMPLETED", "READY"].includes(r.status)
-                          ? "bg-success-light text-success-dark"
-                          : "bg-warning-light text-warning-dark"
+                        : [
+                            "EMBEDDED",
+                            "EXTRACTED",
+                            "COMPARED",
+                            "ANALYZED",
+                            "RISK_EXTRACTED",
+                            "TONE_EXTRACTED",
+                            "COMPLETED",
+                            "READY",
+                            "METRICS_READY",
+                            "COMPARISON_READY",
+                            "ANALYTICS_READY",
+                            "RISKS_READY",
+                          ].includes(r.status)
+                        ? "bg-success-light text-success-dark"
+                        : "bg-warning-light text-warning-dark"
                     }`}
                   >
                     {r.status}

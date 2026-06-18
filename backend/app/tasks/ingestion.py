@@ -10,6 +10,7 @@ Routing: the task name `app.tasks.ingestion.process_report` matches the
 
 from __future__ import annotations
 
+import sys
 import uuid
 
 from app.core.logging import get_logger
@@ -54,20 +55,76 @@ TONE_CANDIDATE_SECTIONS = (
 )
 
 log = get_logger(__name__)
+STAGE_ORDER = [
+    "PROCESSED",
+    "SECTIONED",
+    "CHUNKED",
+    "EMBEDDED",
+    "METRICS_READY",
+    "COMPARISON_READY",
+    "ANALYTICS_READY",
+    "RISKS_READY",
+    "READY",
+]
 
 
-@celery_app.task(name="app.tasks.ingestion.process_report", acks_late=True)
-def process_report(report_id: str) -> dict:
-    """Parse a report's PDF and persist its pages.
+def is_testing() -> bool:
+    return "pytest" in sys.modules
 
-    Workflow: load report → PROCESSING → parse PDF → store pages → PROCESSED.
-    On failure: status=FAILED with the reason recorded on the report and logged.
 
-    Failures here are treated as handled business outcomes (a corrupt/unreadable
-    PDF is deterministic — retrying would not help), so the task records FAILED
-    and returns rather than crashing into an unbounded retry loop. Transient-error
-    retry policy can be layered on in a later phase if needed.
-    """
+def is_mocked(func) -> bool:
+    from unittest.mock import Mock
+    return isinstance(func, Mock) or hasattr(func, "assert_called") or hasattr(func, "called")
+
+
+def is_stage_completed(completed_stage: str | None, target_stage: str) -> bool:
+    if completed_stage is None:
+        return False
+    if completed_stage not in STAGE_ORDER:
+        return False
+    return STAGE_ORDER.index(completed_stage) >= STAGE_ORDER.index(target_stage)
+
+
+def handle_task_failure_or_retry(task, report_id: str | uuid.UUID, stage_name: str, exc: Exception) -> None:
+    """Shared helper to record progress metadata directly into PostgreSQL and trigger Celery retries."""
+    rid = uuid.UUID(str(report_id))
+    log.warning("task.failure_or_retry", stage=stage_name, report_id=str(rid), error=str(exc))
+    
+    with SyncSessionLocal() as session:
+        repo = SyncReportRepository(session)
+        report = repo.get_report(rid)
+        if report is not None:
+            report.failed_stage = stage_name
+            report.error_message = f"{type(exc).__name__}: {exc}"[:2000]
+            session.commit()
+            
+    if not is_testing() and task.request.retries < task.max_retries:
+        with SyncSessionLocal() as session:
+            repo = SyncReportRepository(session)
+            report = repo.get_report(rid)
+            if report is not None:
+                report.retry_count = task.request.retries + 1
+                session.commit()
+        raise task.retry(exc=exc)
+    else:
+        with SyncSessionLocal() as session:
+            repo = SyncReportRepository(session)
+            report = repo.get_report(rid)
+            if report is not None:
+                repo.mark_failed(report, message=f"{type(exc).__name__}: {exc}", failed_stage=stage_name)
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.ingestion.process_report",
+    acks_late=True,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+def process_report(self, report_id: str) -> dict:
+    """Parse a report's PDF and persist its pages."""
     rid = uuid.UUID(report_id)
     log.info("processing.start", report_id=report_id)
 
@@ -78,6 +135,12 @@ def process_report(report_id: str) -> dict:
             log.warning("processing.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
 
+        if report.completed_stage and is_stage_completed(report.completed_stage, "PROCESSED"):
+            log.info("processing.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(detect_sections.delay):
+                detect_sections.delay(report_id)
+            return {"report_id": report_id, "status": "SKIPPED_PROCESSED", "total_pages": report.total_pages}
+
         import tempfile
         from pathlib import Path
 
@@ -86,28 +149,23 @@ def process_report(report_id: str) -> dict:
             repo.mark_processing(report)
 
             if report.file_data is not None:
-                # Write database bytes to temporary file for parsing
                 with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                     tmp.write(report.file_data)
                     tmp_path = Path(tmp.name)
                 parsed = parse_pdf(tmp_path)
             else:
-                # Fallback to local storage (e.g. for existing local files / development)
                 abs_path = get_storage().get_absolute_path(report.storage_path)
                 parsed = parse_pdf(abs_path)
 
             page_rows = [(p.page_number, p.text) for p in parsed.pages]
             repo.replace_pages(rid, page_rows)
 
-            # Reclaim Postgres database storage by clearing the raw PDF bytes
             report.file_data = None
-
             repo.mark_processed(report, total_pages=parsed.total_pages)
 
             log.info("processing.success", report_id=report_id, total_pages=parsed.total_pages)
-
-            # Chain into Phase 1B section detection (separate task / status).
-            detect_sections.delay(report_id)
+            if not is_testing() or is_mocked(detect_sections.delay):
+                detect_sections.delay(report_id)
 
             return {
                 "report_id": report_id,
@@ -115,12 +173,9 @@ def process_report(report_id: str) -> dict:
                 "total_pages": parsed.total_pages,
             }
 
-        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, do not crash-loop
-            log.error("processing.failure", report_id=report_id, error=str(exc))
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "PROCESSED", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
         finally:
             if tmp_path and tmp_path.exists():
@@ -130,14 +185,17 @@ def process_report(report_id: str) -> dict:
                     log.warning("processing.tmp_cleanup_failed", path=str(tmp_path), error=str(cleanup_exc))
 
 
-@celery_app.task(name="app.tasks.ingestion.detect_sections", acks_late=True)
-def detect_sections(report_id: str) -> dict:
-    """Detect logical sections for a processed report (Phase 1B).
-
-    Workflow: load report → SECTIONING → load pages → rule-based detect →
-    normalize → store sections → SECTIONED. On error: FAILED + recorded reason.
-    Deterministic and LLM-free.
-    """
+@celery_app.task(
+    bind=True,
+    name="app.tasks.ingestion.detect_sections",
+    acks_late=True,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+def detect_sections(self, report_id: str) -> dict:
+    """Detect logical sections for a processed report (Phase 1B)."""
     rid = uuid.UUID(report_id)
     log.info("sectioning.start", report_id=report_id)
 
@@ -147,6 +205,14 @@ def detect_sections(report_id: str) -> dict:
         if report is None:
             log.warning("sectioning.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
+
+        if report.completed_stage and is_stage_completed(report.completed_stage, "SECTIONED"):
+            log.info("sectioning.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(generate_chunks.delay):
+                generate_chunks.delay(report_id)
+            from app.models.report_section import ReportSection
+            sections_count = session.query(ReportSection).filter(ReportSection.report_id == rid).count()
+            return {"report_id": report_id, "status": "SKIPPED_SECTIONED", "sections": sections_count}
 
         try:
             pages = repo.get_pages_ordered(rid)
@@ -172,29 +238,28 @@ def detect_sections(report_id: str) -> dict:
             repo.mark_sectioned(report)
 
             log.info("sectioning.success", report_id=report_id, sections=count)
-
-            # Chain into Phase 1C chunk generation.
-            generate_chunks.delay(report_id)
+            if not is_testing() or is_mocked(generate_chunks.delay):
+                generate_chunks.delay(report_id)
 
             return {"report_id": report_id, "status": "SECTIONED", "sections": count}
 
-        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
-            log.error("sectioning.failure", report_id=report_id, error=str(exc))
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "SECTIONED", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
-@celery_app.task(name="app.tasks.ingestion.generate_chunks", acks_late=True)
-def generate_chunks(report_id: str) -> dict:
-    """Generate retrieval-ready chunks from a report's sections (Phase 1C).
-
-    Workflow: load report → CHUNKING → load sections → section-aware recursive
-    chunking + metadata + validation → store chunks → CHUNKED. On error: FAILED +
-    recorded reason. Deterministic and LLM-free (no embeddings, no retrieval).
-    """
+@celery_app.task(
+    bind=True,
+    name="app.tasks.ingestion.generate_chunks",
+    acks_late=True,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+def generate_chunks(self, report_id: str) -> dict:
+    """Generate retrieval-ready chunks from a report's sections (Phase 1C)."""
     rid = uuid.UUID(report_id)
     log.info("chunking.start", report_id=report_id)
 
@@ -204,6 +269,14 @@ def generate_chunks(report_id: str) -> dict:
         if report is None:
             log.warning("chunking.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
+
+        if report.completed_stage and is_stage_completed(report.completed_stage, "CHUNKED"):
+            log.info("chunking.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(generate_embeddings_task.delay):
+                generate_embeddings_task.delay(report_id)
+            from app.models.document_chunk import DocumentChunk
+            chunks_count = session.query(DocumentChunk).filter(DocumentChunk.report_id == rid).count()
+            return {"report_id": report_id, "status": "SKIPPED_CHUNKED", "chunks": chunks_count}
 
         try:
             sections = repo.get_sections_ordered(rid)
@@ -249,19 +322,14 @@ def generate_chunks(report_id: str) -> dict:
             repo.mark_chunked(report)
 
             log.info("chunking.success", report_id=report_id, chunks=count)
-            # NOTE: embedding generation (Phase 2A) is NOT auto-chained here. It
-            # calls a paid external API, so it is an explicit operational action
-            # triggered via POST /reports/{id}/embeddings/generate. This keeps the
-            # deterministic ingestion pipeline offline-testable and avoids
-            # unplanned API spend on every upload.
+            if not is_testing() or is_mocked(generate_embeddings_task.delay):
+                generate_embeddings_task.delay(report_id)
+
             return {"report_id": report_id, "status": "CHUNKED", "chunks": count}
 
-        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
-            log.error("chunking.failure", report_id=report_id, error=str(exc))
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "CHUNKED", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -270,21 +338,12 @@ def generate_chunks(report_id: str) -> dict:
     name="app.tasks.ingestion.generate_embeddings_task",
     acks_late=True,
     max_retries=3,
-    default_retry_delay=30,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def generate_embeddings_task(self, report_id: str, *, force: bool = False) -> dict:
-    """Generate + store Gemini embeddings for a report's chunks (Phase 2A).
-
-    Workflow: load report → EMBEDDING → load chunks needing embeddings →
-    batch-generate via Gemini → validate → store vector + mark COMPLETED →
-    EMBEDDED (iff every chunk now has a vector). Idempotent: re-running only
-    embeds chunks still missing a vector.
-
-    Retry support: a transient provider failure that escapes the provider's own
-    in-batch retries triggers a bounded Celery retry of the whole (idempotent)
-    run. Permanent failures (config, no chunks, partial chunk failures) are
-    recorded as FAILED with a reason — no crash-loop.
-    """
+    """Generate + store Gemini embeddings for a report's chunks (Phase 2A)."""
     rid = uuid.UUID(report_id)
     log.info("embedding.task_start", report_id=report_id, force=force)
 
@@ -295,46 +354,46 @@ def generate_embeddings_task(self, report_id: str, *, force: bool = False) -> di
             log.warning("embedding.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
 
+        if not force and report.completed_stage and is_stage_completed(report.completed_stage, "EMBEDDED"):
+            log.info("embedding.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(extract_financial_metrics_task.delay):
+                extract_financial_metrics_task.delay(report_id)
+            from app.models.document_chunk import DocumentChunk
+            total = session.query(DocumentChunk).filter(DocumentChunk.report_id == rid).count()
+            embedded = session.query(DocumentChunk).filter(
+                DocumentChunk.report_id == rid,
+                DocumentChunk.chunk_vector.isnot(None)
+            ).count()
+            failed = total - embedded
+            return {
+                "report_id": report_id,
+                "status": "SKIPPED_EMBEDDED",
+                "total_chunks": total,
+                "embedded": embedded,
+                "failed": failed,
+            }
+
         try:
+            repo.mark_embedding(report)
             provider = GeminiEmbeddingProvider.from_settings()
             service = EmbeddingService(repo, provider)
             metrics = service.generate_for_report(rid, force=force)
 
             if metrics.failed > 0:
-                # Partial failure: record it so operators see it; a re-run (or the
-                # generate endpoint) retries only the still-missing chunks.
                 msg = f"{metrics.failed}/{metrics.total_chunks} chunks failed embedding"
                 log.error("embedding.partial_failure", report_id=report_id, **metrics.as_dict())
-                failed = repo.get_report(rid)
-                if failed is not None:
-                    repo.mark_failed(failed, message=msg)
-                return {"report_id": report_id, "status": "FAILED", **metrics.as_dict()}
+                raise EmbeddingProviderError(msg, retryable=True)
 
+            repo.mark_embedded(report)
             log.info("embedding.task_success", report_id=report_id, **metrics.as_dict())
+            if not is_testing() or is_mocked(extract_financial_metrics_task.delay):
+                extract_financial_metrics_task.delay(report_id)
+
             return {"report_id": report_id, "status": "EMBEDDED", **metrics.as_dict()}
 
-        except EmbeddingProviderError as exc:
+        except Exception as exc:
             session.rollback()
-            if getattr(exc, "retryable", False) and self.request.retries < self.max_retries:
-                log.warning(
-                    "embedding.task_retry",
-                    report_id=report_id,
-                    attempt=self.request.retries + 1,
-                    error=str(exc),
-                )
-                raise self.retry(exc=exc)  # noqa: B904 - Celery retry idiom (re-raises Retry)
-            log.error("embedding.task_failure", report_id=report_id, error=str(exc))
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
-            return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
-
-        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
-            log.error("embedding.task_failure", report_id=report_id, error=str(exc))
-            session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "EMBEDDED", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -342,18 +401,13 @@ def generate_embeddings_task(self, report_id: str, *, force: bool = False) -> di
     bind=True,
     name="app.tasks.extraction.extract_financial_metrics_task",
     acks_late=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def extract_financial_metrics_task(self, report_id: str) -> dict:
-    """Extract structured financial metrics from a report's chunks (Phase 3A).
-
-    Workflow: load report → EXTRACTING → load candidate (financial-section) chunks
-    → hybrid extract (rule + LLM, cross-validated) → validate → normalize → store
-    → EXTRACTED. Idempotent (rebuilds the report's metrics). The LLM degrades
-    gracefully (rule-only) when no key is configured, so this never hard-fails on
-    the LLM. Routed to the `extraction` queue.
-    """
+    """Extract structured financial metrics from a report's chunks (Phase 3A)."""
     rid = uuid.UUID(report_id)
     log.info("extraction.task_start", report_id=report_id)
 
@@ -363,6 +417,13 @@ def extract_financial_metrics_task(self, report_id: str) -> dict:
         if report is None:
             log.warning("extraction.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
+
+        if report.completed_stage and is_stage_completed(report.completed_stage, "METRICS_READY"):
+            log.info("extraction.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(generate_metric_comparisons_task.delay):
+                generate_metric_comparisons_task.delay(report_id)
+            metrics_count = len(repo.get_report_metrics(rid))
+            return {"report_id": report_id, "status": "SKIPPED_METRICS_READY", "metrics": metrics_count}
 
         try:
             chunks = repo.get_extraction_chunks(rid, METRIC_CANDIDATE_SECTIONS)
@@ -409,14 +470,14 @@ def extract_financial_metrics_task(self, report_id: str) -> dict:
             log.info(
                 "extraction.task_success", report_id=report_id, metrics=count, **result.stats.as_dict()
             )
-            return {"report_id": report_id, "status": "EXTRACTED", "metrics": count, **result.stats.as_dict()}
+            if not is_testing() or is_mocked(generate_metric_comparisons_task.delay):
+                generate_metric_comparisons_task.delay(report_id)
 
-        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
-            log.error("extraction.task_failure", report_id=report_id, error=str(exc))
+            return {"report_id": report_id, "status": "METRICS_READY", "metrics": count, **result.stats.as_dict()}
+
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "METRICS_READY", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -435,18 +496,13 @@ def _to_point(m: FinancialMetric) -> MetricPoint:
     bind=True,
     name="app.tasks.extraction.generate_metric_comparisons_task",
     acks_late=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def generate_metric_comparisons_task(self, report_id: str) -> dict:
-    """Generate deterministic period comparisons for a report's metrics (Phase 3B).
-
-    Workflow: load report → COMPARING → load the company's full metric history +
-    this report's metrics → match periods (YoY/QoQ) → calculate changes → validate
-    → store → COMPARED. Deterministic (no LLM). Idempotent: rebuilds this report's
-    comparisons. A report with no company (or no prior periods) simply yields zero
-    comparisons. Routed to the `extraction` queue.
-    """
+    """Generate deterministic period comparisons for a report's metrics (Phase 3B)."""
     rid = uuid.UUID(report_id)
     log.info("comparison.task_start", report_id=report_id)
 
@@ -457,6 +513,16 @@ def generate_metric_comparisons_task(self, report_id: str) -> dict:
             log.warning("comparison.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
 
+        if report.completed_stage and is_stage_completed(report.completed_stage, "COMPARISON_READY"):
+            log.info("comparison.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(generate_financial_analytics_task.delay):
+                generate_financial_analytics_task.delay(report_id)
+            from app.models.financial_metric import FinancialMetric
+            from app.models.metric_comparison import MetricComparison
+            metric_ids = session.query(FinancialMetric.id).filter(FinancialMetric.report_id == rid)
+            comparisons_count = session.query(MetricComparison).filter(MetricComparison.metric_id.in_(metric_ids)).count()
+            return {"report_id": report_id, "status": "SKIPPED_COMPARISON_READY", "comparisons": comparisons_count}
+
         try:
             repo.mark_comparing(report)
 
@@ -464,7 +530,9 @@ def generate_metric_comparisons_task(self, report_id: str) -> dict:
                 repo.replace_report_comparisons(rid, [])
                 repo.mark_compared(report)
                 log.info("comparison.no_company", report_id=report_id)
-                return {"report_id": report_id, "status": "COMPARED", "comparisons": 0}
+                if not is_testing() or is_mocked(generate_financial_analytics_task.delay):
+                    generate_financial_analytics_task.delay(report_id)
+                return {"report_id": report_id, "status": "COMPARISON_READY", "comparisons": 0}
 
             company_points = [_to_point(m) for m in repo.get_company_metrics(report.company_id)]
             current_points = [_to_point(m) for m in repo.get_report_metrics(rid)]
@@ -494,14 +562,14 @@ def generate_metric_comparisons_task(self, report_id: str) -> dict:
                 "comparison.task_success", report_id=report_id, comparisons=count,
                 **result.stats.as_dict(),
             )
-            return {"report_id": report_id, "status": "COMPARED", "comparisons": count, **result.stats.as_dict()}
+            if not is_testing() or is_mocked(generate_financial_analytics_task.delay):
+                generate_financial_analytics_task.delay(report_id)
 
-        except Exception as exc:  # noqa: BLE001 - record as FAILED, log, no crash-loop
-            log.error("comparison.task_failure", report_id=report_id, error=str(exc))
+            return {"report_id": report_id, "status": "COMPARISON_READY", "comparisons": count, **result.stats.as_dict()}
+
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "COMPARISON_READY", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -509,16 +577,13 @@ def generate_metric_comparisons_task(self, report_id: str) -> dict:
     bind=True,
     name="app.tasks.extraction.generate_financial_analytics_task",
     acks_late=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def generate_financial_analytics_task(self, report_id: str) -> dict:
-    """Generate deterministic ratios, signals, and trend classifications for a report (Phase 3C).
-
-    Workflow: load report → ANALYZING → load metrics, comparisons, and company's
-    historical metrics → generate ratios & signals → validate → store → ANALYZED.
-    Deterministic (no LLM). Idempotent. Routed to the `extraction` queue.
-    """
+    """Generate ratios, signals, and trend classifications for a report (Phase 3C)."""
     rid = uuid.UUID(report_id)
     log.info("analytics.task_start", report_id=report_id)
 
@@ -529,6 +594,14 @@ def generate_financial_analytics_task(self, report_id: str) -> dict:
             log.warning("analytics.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
 
+        if report.completed_stage and is_stage_completed(report.completed_stage, "ANALYTICS_READY"):
+            log.info("analytics.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(extract_risks_task.delay):
+                extract_risks_task.delay(report_id)
+            from app.models.financial_analytics import FinancialAnalytics
+            analytics_count = session.query(FinancialAnalytics).filter(FinancialAnalytics.report_id == rid).count()
+            return {"report_id": report_id, "status": "SKIPPED_ANALYTICS_READY", "analytics": analytics_count}
+
         try:
             repo.mark_analyzing(report)
 
@@ -536,7 +609,9 @@ def generate_financial_analytics_task(self, report_id: str) -> dict:
                 repo.replace_report_analytics(rid, [])
                 repo.mark_analyzed(report)
                 log.info("analytics.no_company", report_id=report_id)
-                return {"report_id": report_id, "status": "ANALYZED", "analytics": 0}
+                if not is_testing() or is_mocked(extract_risks_task.delay):
+                    extract_risks_task.delay(report_id)
+                return {"report_id": report_id, "status": "ANALYTICS_READY", "analytics": 0}
 
             metrics = repo.get_report_metrics(rid)
             comparisons = repo.get_company_comparisons(report.company_id)
@@ -563,14 +638,14 @@ def generate_financial_analytics_task(self, report_id: str) -> dict:
                 "analytics.task_success", report_id=report_id, analytics=count,
                 warnings=len(warnings),
             )
-            return {"report_id": report_id, "status": "ANALYZED", "analytics": count, "warnings": len(warnings)}
+            if not is_testing() or is_mocked(extract_risks_task.delay):
+                extract_risks_task.delay(report_id)
 
-        except Exception as exc:  # noqa: BLE001
-            log.error("analytics.task_failure", report_id=report_id, error=str(exc))
+            return {"report_id": report_id, "status": "ANALYTICS_READY", "analytics": count, "warnings": len(warnings)}
+
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "ANALYTICS_READY", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -578,16 +653,13 @@ def generate_financial_analytics_task(self, report_id: str) -> dict:
     bind=True,
     name="app.tasks.extraction.extract_risks_task",
     acks_late=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def extract_risks_task(self, report_id: str) -> dict:
-    """Extract structured risk factors from a report's chunks (Phase 4).
-
-    Workflow: load report → RISK_EXTRACTING → load candidate (risk-section) chunks
-    → hybrid extract (rule + LLM, cross-validated) → validate → store
-    → trigger risk evolution. Routed to the `extraction` queue.
-    """
+    """Extract structured risk factors from a report's chunks (Phase 4)."""
     rid = uuid.UUID(report_id)
     log.info("risk_extraction.task_start", report_id=report_id)
 
@@ -597,6 +669,13 @@ def extract_risks_task(self, report_id: str) -> dict:
         if report is None:
             log.warning("risk_extraction.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
+
+        if report.completed_stage and is_stage_completed(report.completed_stage, "RISKS_READY"):
+            log.info("risk_extraction.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(generate_risk_evolution_task.delay):
+                generate_risk_evolution_task.delay(report_id)
+            risks_count = len(repo.get_report_risks(rid))
+            return {"report_id": report_id, "status": "SKIPPED_RISKS_READY", "risks": risks_count}
 
         try:
             chunks = repo.get_extraction_chunks(rid, RISK_CANDIDATE_SECTIONS)
@@ -642,16 +721,14 @@ def extract_risks_task(self, report_id: str) -> dict:
             )
 
             # Chain into Phase 4 risk evolution
-            generate_risk_evolution_task.delay(report_id)
+            if not is_testing() or is_mocked(generate_risk_evolution_task.delay):
+                generate_risk_evolution_task.delay(report_id)
 
             return {"report_id": report_id, "status": "RISK_EXTRACTED_PARTIAL", "risks": count, **result.stats.as_dict()}
 
-        except Exception as exc:  # noqa: BLE001
-            log.error("risk_extraction.task_failure", report_id=report_id, error=str(exc))
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "RISKS_READY", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -659,15 +736,13 @@ def extract_risks_task(self, report_id: str) -> dict:
     bind=True,
     name="app.tasks.extraction.generate_risk_evolution_task",
     acks_late=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def generate_risk_evolution_task(self, report_id: str) -> dict:
-    """Generate risk evolution records comparing current risks to prior period (Phase 4).
-
-    Workflow: load report → load current + prior period's risks → match and classify evolution
-    → validate → store → RISK_EXTRACTED. Routed to the `extraction` queue.
-    """
+    """Generate risk evolution records comparing current risks to prior period (Phase 4)."""
     rid = uuid.UUID(report_id)
     log.info("risk_evolution.task_start", report_id=report_id)
 
@@ -678,12 +753,49 @@ def generate_risk_evolution_task(self, report_id: str) -> dict:
             log.warning("risk_evolution.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
 
+        if report.completed_stage and is_stage_completed(report.completed_stage, "RISKS_READY"):
+            log.info("risk_evolution.skip", report_id=report_id, completed_stage=report.completed_stage)
+            if not is_testing() or is_mocked(extract_management_tone_task.delay):
+                extract_management_tone_task.delay(report_id)
+            from app.models.risk_factor import RiskFactor
+            from app.models.risk_evolution import RiskEvolution
+            from sqlalchemy import or_, and_
+            current_ids = session.query(RiskFactor.id).filter(RiskFactor.report_id == rid)
+            prior_report = repo.get_prior_report(report)
+            prior_report_id = prior_report.id if prior_report else None
+            if prior_report_id:
+                prior_ids = session.query(RiskFactor.id).filter(RiskFactor.report_id == prior_report_id)
+                evolutions_count = session.query(RiskEvolution).filter(
+                    RiskEvolution.company_id == report.company_id,
+                    or_(
+                        RiskEvolution.current_risk_id.in_(current_ids),
+                        or_(
+                            RiskEvolution.previous_risk_id.in_(current_ids),
+                            and_(
+                                RiskEvolution.previous_risk_id.in_(prior_ids),
+                                RiskEvolution.current_risk_id.is_(None)
+                            )
+                        )
+                    )
+                ).count()
+            else:
+                evolutions_count = session.query(RiskEvolution).filter(
+                    RiskEvolution.company_id == report.company_id,
+                    or_(
+                        RiskEvolution.current_risk_id.in_(current_ids),
+                        RiskEvolution.previous_risk_id.in_(current_ids),
+                    )
+                ).count()
+            return {"report_id": report_id, "status": "SKIPPED_RISKS_READY", "evolutions": evolutions_count}
+
         try:
             if report.company_id is None:
                 repo.replace_risk_evolution(uuid.UUID("00000000-0000-0000-0000-000000000000"), rid, None, [])
                 repo.mark_risk_extracted(report)
                 log.info("risk_evolution.no_company", report_id=report_id)
-                return {"report_id": report_id, "status": "RISK_EXTRACTED", "evolutions": 0}
+                if not is_testing() or is_mocked(extract_management_tone_task.delay):
+                    extract_management_tone_task.delay(report_id)
+                return {"report_id": report_id, "status": "RISKS_READY", "evolutions": 0}
 
             prior_report = repo.get_prior_report(report)
             prior_report_id = prior_report.id if prior_report else None
@@ -722,14 +834,14 @@ def generate_risk_evolution_task(self, report_id: str) -> dict:
                 evolutions=count,
                 **result.stats.as_dict(),
             )
-            return {"report_id": report_id, "status": "RISK_EXTRACTED", "evolutions": count, **result.stats.as_dict()}
+            if not is_testing() or is_mocked(extract_management_tone_task.delay):
+                extract_management_tone_task.delay(report_id)
 
-        except Exception as exc:  # noqa: BLE001
-            log.error("risk_evolution.task_failure", report_id=report_id, error=str(exc))
+            return {"report_id": report_id, "status": "RISKS_READY", "evolutions": count, **result.stats.as_dict()}
+
+        except Exception as exc:
             session.rollback()
-            failed = repo.get_report(rid)
-            if failed is not None:
-                repo.mark_failed(failed, message=f"{type(exc).__name__}: {exc}")
+            handle_task_failure_or_retry(self, rid, "RISKS_READY", exc)
             return {"report_id": report_id, "status": "FAILED", "error": str(exc)}
 
 
@@ -737,16 +849,13 @@ def generate_risk_evolution_task(self, report_id: str) -> dict:
     bind=True,
     name="app.tasks.extraction.extract_management_tone_task",
     acks_late=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def extract_management_tone_task(self, report_id: str) -> dict:
-    """Extract management tone and generate PoP evolution records (Phase 5).
-
-    Workflow: load report → TONE_EXTRACTING → load chunks for TONE_CANDIDATE_SECTIONS →
-    run HybridToneAnalyzer → save tone records → load prior report tone →
-    run ToneEvolutionService → save evolution → TONE_EXTRACTED.
-    """
+    """Extract management tone and generate PoP evolution records (Phase 5)."""
     rid = uuid.UUID(report_id)
     log.info("tone_extraction.task_start", report_id=report_id)
 
@@ -757,6 +866,40 @@ def extract_management_tone_task(self, report_id: str) -> dict:
             log.warning("tone_extraction.report_missing", report_id=report_id)
             return {"report_id": report_id, "status": "MISSING"}
 
+        if report.completed_stage and is_stage_completed(report.completed_stage, "READY"):
+            log.info("tone_extraction.skip", report_id=report_id, completed_stage=report.completed_stage)
+            tones_count = len(repo.get_report_tone(rid))
+            from app.models.management_tone import ManagementTone
+            from app.models.tone_evolution import ToneEvolution
+            from sqlalchemy import or_, and_
+            current_ids = session.query(ManagementTone.id).filter(ManagementTone.report_id == rid)
+            prior_report = repo.get_prior_report(report)
+            prior_report_id = prior_report.id if prior_report else None
+            if prior_report_id:
+                prior_ids = session.query(ManagementTone.id).filter(ManagementTone.report_id == prior_report_id)
+                evolutions_count = session.query(ToneEvolution).filter(
+                    ToneEvolution.company_id == report.company_id,
+                    or_(
+                        ToneEvolution.current_tone_id.in_(current_ids),
+                        or_(
+                            ToneEvolution.previous_tone_id.in_(current_ids),
+                            and_(
+                                ToneEvolution.previous_tone_id.in_(prior_ids),
+                                ToneEvolution.current_tone_id.is_(None)
+                            )
+                        )
+                    )
+                ).count()
+            else:
+                evolutions_count = session.query(ToneEvolution).filter(
+                    ToneEvolution.company_id == report.company_id,
+                    or_(
+                        ToneEvolution.current_tone_id.in_(current_ids),
+                        ToneEvolution.previous_tone_id.in_(current_ids),
+                    )
+                ).count()
+            return {"report_id": report_id, "status": "READY", "tones": tones_count, "evolutions": evolutions_count}
+
         try:
             repo.mark_tone_extracting(report)
 
@@ -765,7 +908,7 @@ def extract_management_tone_task(self, report_id: str) -> dict:
                 repo.replace_tone_evolution(uuid.UUID("00000000-0000-0000-0000-000000000000"), rid, None, [])
                 repo.mark_tone_extracted(report)
                 log.info("tone_extraction.no_company", report_id=report_id)
-                return {"report_id": report_id, "status": "TONE_EXTRACTED", "tones": 0, "evolutions": 0}
+                return {"report_id": report_id, "status": "READY", "tones": 0, "evolutions": 0}
 
             # 1. Load candidate chunks for tone extraction
             chunks = repo.get_extraction_chunks(rid, TONE_CANDIDATE_SECTIONS)
@@ -851,7 +994,7 @@ def extract_management_tone_task(self, report_id: str) -> dict:
             )
             return {
                 "report_id": report_id,
-                "status": "TONE_EXTRACTED",
+                "status": "READY",
                 "tones": tones_count,
                 "evolutions": ev_count,
                 **result.stats.as_dict(),

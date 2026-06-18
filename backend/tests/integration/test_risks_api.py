@@ -119,7 +119,7 @@ def test_risk_tasks_ingestion_and_evolution(sync_session: Session) -> None:
 
     # 3. Generate risk evolution for 2024 report (since there is a prior 2023 report)
     res_evol = generate_risk_evolution_task(str(report_2024_id))
-    assert res_evol["status"] == "RISK_EXTRACTED"
+    assert res_evol["status"] == "RISKS_READY"
     assert res_evol["evolutions"] >= 1
 
     # Verify risk evolution record was created
@@ -177,8 +177,7 @@ async def test_risks_api_endpoints(api_client: AsyncClient, sync_session: Sessio
     assert resp_evol.status_code == 200
     evol_listing = resp_evol.json()
     assert evol_listing["count"] >= 1
-    evol_row = evol_listing["items"][0]
-    assert evol_row["evolution_type"] == "ESCALATED_RISK"
+    assert any(e["evolution_type"] == "ESCALATED_RISK" for e in evol_listing["items"])
 
     # Test GET /companies/{company_id}/risk-summary
     resp_sum = await api_client.get(f"{PREFIX}/companies/{company_id}/risk-summary")

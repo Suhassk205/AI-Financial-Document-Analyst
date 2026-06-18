@@ -108,7 +108,7 @@ def test_analytics_task_stores_results(sync_session: Session) -> None:
     ids = _seed(sync_session)
     result = generate_financial_analytics_task(str(ids["r24"]))
     
-    assert result["status"] == "ANALYZED"
+    assert result["status"] == "ANALYTICS_READY"
     assert result["analytics"] > 0
 
     rows = (

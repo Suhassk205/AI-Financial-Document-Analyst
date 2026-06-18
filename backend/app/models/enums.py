@@ -26,16 +26,32 @@ class ReportStatus(str, Enum):
     CHUNKED = "CHUNKED"          # chunks generated and persisted (Phase 1C done)
     EMBEDDING = "EMBEDDING"      # worker is generating embeddings (Phase 2A)
     EMBEDDED = "EMBEDDED"        # every chunk has a valid embedding (Phase 2A done)
-    EXTRACTING = "EXTRACTING"    # worker is extracting financial metrics (Phase 3A)
-    EXTRACTED = "EXTRACTED"      # financial metrics extracted and stored (Phase 3A done)
-    COMPARING = "COMPARING"      # worker is generating period comparisons (Phase 3B)
-    COMPARED = "COMPARED"        # period comparisons generated and stored (Phase 3B done)
-    ANALYZING = "ANALYZING"      # worker is generating financial analytics (Phase 3C)
-    ANALYZED = "ANALYZED"        # financial analytics generated and stored (Phase 3C done)
-    RISK_EXTRACTING = "RISK_EXTRACTING"  # worker is extracting risks (Phase 4)
-    RISK_EXTRACTED = "RISK_EXTRACTED"    # risks extracted and stored (Phase 4 done)
-    TONE_EXTRACTING = "TONE_EXTRACTING"  # worker is extracting management tone (Phase 5)
-    TONE_EXTRACTED = "TONE_EXTRACTED"    # management tone extracted and stored (Phase 5 done)
+    
+    # Mapped and new statuses for automated pipeline execution
+    EXTRACTING = "METRICS_EXTRACTING"
+    EXTRACTED = "METRICS_READY"
+    METRICS_EXTRACTING = "METRICS_EXTRACTING"
+    METRICS_READY = "METRICS_READY"
+    
+    COMPARING = "COMPARING"
+    COMPARED = "COMPARISON_READY"
+    COMPARISON_READY = "COMPARISON_READY"
+    
+    ANALYZING = "ANALYTICS"
+    ANALYZED = "ANALYTICS_READY"
+    ANALYTICS = "ANALYTICS"
+    ANALYTICS_READY = "ANALYTICS_READY"
+    
+    RISK_EXTRACTING = "RISKS"
+    RISK_EXTRACTED = "RISKS_READY"
+    RISKS = "RISKS"
+    RISKS_READY = "RISKS_READY"
+    
+    TONE_EXTRACTING = "TONE"
+    TONE_EXTRACTED = "READY"
+    TONE = "TONE"
+    READY = "READY"
+    
     FAILED = "FAILED"            # a processing step failed (see error_message / logs)
 
 

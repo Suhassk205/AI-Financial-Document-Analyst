@@ -193,7 +193,7 @@ async def seed() -> dict[str, Any]:
                 year=spec["year"],
                 original_filename=f"{spec['ticker']}_{spec['year']}_10K.pdf",
                 storage_path=f"demo/{spec['ticker']}/{spec['year']}_10K.pdf",
-                status=ReportStatus.TONE_EXTRACTED,
+                status=ReportStatus.READY,
                 total_pages=62,
             )
             db.add(report)

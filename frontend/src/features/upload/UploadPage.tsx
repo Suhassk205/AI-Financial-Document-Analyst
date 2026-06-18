@@ -118,7 +118,22 @@ export default function UploadPage() {
 
   const statusColor = (status: string) => {
     if (status === "FAILED") return "text-danger-dark bg-danger-light";
-    if (["EMBEDDED", "COMPARED", "ANALYZED", "RISK_EXTRACTED", "TONE_EXTRACTED", "COMPLETED"].includes(status))
+    if (
+      [
+        "EMBEDDED",
+        "EXTRACTED",
+        "COMPARED",
+        "ANALYZED",
+        "RISK_EXTRACTED",
+        "TONE_EXTRACTED",
+        "COMPLETED",
+        "READY",
+        "METRICS_READY",
+        "COMPARISON_READY",
+        "ANALYTICS_READY",
+        "RISKS_READY",
+      ].includes(status)
+    )
       return "text-success-dark bg-success-light";
     return "text-warning-dark bg-warning-light";
   };
@@ -374,7 +389,7 @@ export default function UploadPage() {
                     className="px-5 py-3.5 hover:bg-surface-50/50 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-xs font-bold text-surface-900 truncate">
                           {r.original_filename ?? `Report ${r.id.slice(0, 8)}`}
                         </p>
@@ -382,6 +397,24 @@ export default function UploadPage() {
                           {r.report_type} · {r.year}
                           {r.quarter ? ` Q${r.quarter}` : ""}
                         </p>
+                        {r.status !== "READY" && r.status !== "FAILED" && (
+                          <div className="mt-2 w-full">
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-[9px] text-surface-450">
+                                {r.completed_stage ? `Last: ${r.completed_stage}` : "Starting..."}
+                              </span>
+                              <span className="text-[9px] font-mono text-brand-600 font-bold">
+                                {r.progress ?? 0}%
+                              </span>
+                            </div>
+                            <div className="w-full bg-surface-100 rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className="bg-brand-500 h-1.5 rounded-full transition-all duration-500 ease-out"
+                                style={{ width: `${r.progress ?? 0}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <span
                         className={clsx(
