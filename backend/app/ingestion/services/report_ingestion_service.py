@@ -71,14 +71,23 @@ class ReportIngestionService:
         # 2. Store the raw bytes under a fresh UUID name.
         storage_path = self.storage.save(data, extension=ext)
 
-        # 3. Resolve/create the company (optional in Phase 1A).
-        company_id: uuid.UUID | None = None
-        if ticker or company_name:
-            company = await self.repo.get_or_create_company(
-                name=company_name or (ticker or "Unknown"),
-                ticker=ticker,
-            )
-            company_id = company.id
+        # 3. Resolve/create the company. A company is ALWAYS attached: the
+        #    company-scoped extractions (risk factors + management tone) have a
+        #    NOT NULL company_id, so a report with no company would silently
+        #    produce zero tone records and fail risk extraction. When the user
+        #    does not supply a ticker/name we derive a stable fallback name from
+        #    the uploaded filename so those stages still persist results.
+        resolved_name = (company_name or ticker or "").strip()
+        if not resolved_name:
+            stem = (original_filename or "").rsplit("/", 1)[-1]
+            if "." in stem:
+                stem = stem.rsplit(".", 1)[0]
+            resolved_name = stem.strip() or "Unknown Company"
+        company = await self.repo.get_or_create_company(
+            name=resolved_name,
+            ticker=ticker,
+        )
+        company_id: uuid.UUID | None = company.id
 
         # 4. Create the report record.
         report = await self.repo.create_report(

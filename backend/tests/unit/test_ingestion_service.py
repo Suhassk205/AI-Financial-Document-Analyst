@@ -27,8 +27,9 @@ class FakeSession:
 
 
 class FakeCompany:
-    def __init__(self) -> None:
+    def __init__(self, **kw) -> None:
         self.id = uuid.uuid4()
+        self.__dict__.update(kw)
 
 
 class FakeReport:
@@ -45,7 +46,8 @@ class FakeRepo:
 
     async def get_or_create_company(self, **kw) -> FakeCompany:
         self.company_calls += 1
-        return FakeCompany()
+        self.company_kwargs = kw
+        return FakeCompany(**kw)
 
     async def create_report(self, **kw) -> FakeReport:
         self.created_report = FakeReport(**kw)
@@ -116,7 +118,12 @@ async def test_successful_upload_creates_report_and_enqueues(stub_celery: list[s
 
 
 @pytest.mark.unit
-async def test_upload_without_company_skips_company_creation(stub_celery: list[str]) -> None:
+async def test_upload_without_company_derives_company_from_filename(stub_celery: list[str]) -> None:
+    """A company is ALWAYS attached so risk/tone (NOT NULL company_id) persist.
+
+    When no ticker/name is supplied we fall back to a name derived from the
+    uploaded filename so the report is never left company-less.
+    """
     repo = FakeRepo()
     service = ReportIngestionService(FakeSession(), storage=FakeStorage(), repository=repo)
     await service.ingest_upload(
@@ -126,6 +133,8 @@ async def test_upload_without_company_skips_company_creation(stub_celery: list[s
         report_type=ReportType.OTHER,
         year=2026,
     )
-    assert repo.company_calls == 0
+    assert repo.company_calls == 1
+    assert repo.company_kwargs["name"] == "anon"   # derived from filename stem
+    assert repo.company_kwargs["ticker"] is None
     assert repo.created_report is not None
-    assert repo.created_report.company_id is None
+    assert repo.created_report.company_id is not None
