@@ -52,5 +52,6 @@ USER appuser
 
 EXPOSE 8000
 
-# Production-grade startup using uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-config", "app/core/logging.py"]
+# Use shell form so we can read $PORT injected by hosting platforms like Render.
+# Falls back to 8000 for local Docker Compose usage.
+CMD uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 4
