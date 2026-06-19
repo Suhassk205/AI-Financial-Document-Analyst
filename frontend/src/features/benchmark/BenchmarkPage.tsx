@@ -10,7 +10,7 @@ import { useBenchmarkRun, useBenchmarkSummary, useCreateBenchmarkRun } from "@/h
 import { useReports } from "@/hooks/useReports";
 import type { BenchmarkSummary } from "@/types/api";
 import { useState } from "react";
-import { Target, Trophy, Award, Medal, PlusCircle } from "lucide-react";
+import { Trophy, Award, Medal, PlusCircle } from "lucide-react";
 import { clsx } from "clsx";
 
 export default function BenchmarkPage() {
@@ -141,32 +141,9 @@ export default function BenchmarkPage() {
       />
 
       {!runId && (
-        <div className="grid gap-6 md:grid-cols-2 animate-slide-up">
-          {/* Left: Quick Load Demo */}
-          <div className="glass-panel p-6 bg-white border border-surface-200 flex flex-col justify-between">
-            <div>
-              <h3 className="text-base font-bold text-surface-900 flex items-center gap-2 mb-2">
-                <Trophy className="w-5 h-5 text-warning" />
-                Quick Load Demo Run
-              </h3>
-              <p className="text-sm text-surface-500 mb-6">
-                Directly load the pre-computed Demo Cohort Run to immediately view the leaderboard podium, radar charts, and comparative analytics.
-              </p>
-            </div>
-            <div>
-              <button
-                type="button"
-                onClick={() => setRunId("0bcd40bd-86b6-4fcc-957d-d511d7904b85")}
-                className="w-full py-2.5 px-4 bg-brand-50 border border-brand-200 text-brand-700 font-semibold rounded-lg hover:bg-brand-100 transition-colors flex items-center justify-center gap-2"
-              >
-                <Target className="w-4 h-4" />
-                Load Demo Cohort Run
-              </button>
-            </div>
-          </div>
-
-          {/* Right: Create Cohort Benchmark */}
-          <div className="glass-panel p-6 bg-white border border-surface-200">
+        <div className="max-w-xl mx-auto animate-slide-up">
+          {/* Run Cohort Benchmark */}
+          <div className="glass-panel p-6 bg-white border border-surface-200 shadow-sm rounded-xl">
             <h3 className="text-base font-bold text-surface-900 flex items-center gap-2 mb-2">
               <PlusCircle className="w-5 h-5 text-brand-600" />
               Run Cohort Benchmark
