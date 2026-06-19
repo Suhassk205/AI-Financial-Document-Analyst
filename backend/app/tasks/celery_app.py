@@ -75,32 +75,3 @@ celery_app.conf.update(
     worker_max_memory_per_child=512000,  # restart worker child process if RAM exceeds 512MB
 )
 
-# ---------------------------------------------------------------------------
-# Background HTTP Health Server for Platform Port Scans (e.g. Render Web Services)
-# ---------------------------------------------------------------------------
-import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def log_message(self, format, *args):
-        pass # Suppress logging to stdout/stderr
-
-def run_health_server():
-    port_str = os.environ.get("PORT", "10000")
-    try:
-        port = int(port_str)
-        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        server.serve_forever()
-    except Exception:
-        pass
-
-if "PORT" in os.environ:
-    t = threading.Thread(target=run_health_server, daemon=True)
-    t.start()
-
