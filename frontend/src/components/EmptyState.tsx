@@ -11,8 +11,8 @@ interface EmptyStateProps {
 
 /** Friendly empty state with icon and optional CTA. */
 export default function EmptyState({
-  title = "No data yet",
-  description = "Data will appear here once available.",
+  title = "Nothing here yet",
+  description = "Upload a document or run an analysis to get started.",
   icon,
   action,
   className,

@@ -115,4 +115,18 @@
   .card-grid {
     @apply grid gap-4 sm:grid-cols-2 lg:grid-cols-4;
   }
+
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-surface-900;
+  }
+}
+
+@layer base {
+  ::selection {
+    @apply bg-brand-200 text-brand-900;
+  }
+
+  .dark ::selection {
+    @apply bg-brand-800 text-brand-100;
+  }
 }

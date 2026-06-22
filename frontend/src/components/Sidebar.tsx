@@ -101,6 +101,19 @@ export default function Sidebar() {
         ))}
       </nav>
 
+      {/* Version Label */}
+      <div className="px-3 py-2 border-t border-surface-100 dark:border-surface-700">
+        {collapsed ? (
+          <div className="flex justify-center">
+            <span className="inline-block w-2 h-2 rounded-full bg-brand-500" title="v1.0.0" />
+          </div>
+        ) : (
+          <span className="text-[10px] font-medium text-surface-400 dark:text-surface-500 tracking-wide">
+            v1.0.0
+          </span>
+        )}
+      </div>
+
       {/* Collapse Toggle */}
       <button
         onClick={toggleCollapse}

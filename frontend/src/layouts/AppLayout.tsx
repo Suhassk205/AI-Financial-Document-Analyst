@@ -135,6 +135,13 @@ export default function AppLayout() {
             <Outlet />
           </div>
         </main>
+
+        {/* Footer */}
+        <footer className="border-t border-surface-200 dark:border-surface-800 px-6 py-3 text-center transition-colors duration-200">
+          <p className="text-xs text-surface-400 dark:text-surface-500">
+            © {new Date().getFullYear()} FinAnalyst &middot; Built with AI-powered document analysis
+          </p>
+        </footer>
       </div>
     </div>
   );
